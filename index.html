@@ -1,0 +1,355 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0c11">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; form-action 'none'; base-uri 'self'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="GymTracker">
+  <title>GymTracker — Трекер тренировок</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" href="./favicon.png">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Main Views Container -->
+  <main class="container">
+
+    <!-- SCREEN 1 (Figma: Workouts/List): список тренировок -->
+    <section id="viewProgram" class="view-screen active">
+      <div class="page-header">
+        <h1 class="page-title">Тренировки</h1>
+        <button class="btn-round" onclick="app.openDayEdit()" title="Добавить тренировку" aria-label="Добавить тренировку">
+          <img class="icon" src="./icons/plus.svg" alt="">
+        </button>
+      </div>
+
+      <div id="activeWorkoutBanner" class="active-banner" style="display: none;" onclick="app.resumeActiveWorkout()">
+        <div class="active-banner-info">
+          <div class="active-banner-label">Идёт тренировка</div>
+          <div id="activeBannerDayName" class="workout-card-title">День 1</div>
+          <div id="activeBannerTime" class="workout-card-meta">Начата: —</div>
+        </div>
+        <img class="icon" src="./icons/play.svg" alt="">
+      </div>
+
+      <div id="workoutsList" class="workout-list"></div>
+    </section>
+
+    <!-- SCREEN 2: Экран активной тренировки -->
+    <section id="viewWorkout" class="view-screen">
+      <!-- Figma: Workout/Active — шапка, таймер, карточки упражнений -->
+      <div class="wk-top">
+        <button class="btn-round" onclick="app.navigate('viewProgram')" title="Назад" aria-label="Назад">
+          <img class="icon" src="./icons/caret-left.svg" alt="">
+        </button>
+        <div class="wk-date">
+          <span id="workoutScreenDate">—</span>
+          <span class="wk-dot"></span>
+          <span id="workoutScreenWeekday">—</span>
+        </div>
+      </div>
+      <div class="wk-timer-row">
+        <div id="workoutClock" class="wk-timer" aria-live="off">0:00</div>
+        <div class="wk-timer-btns">
+          <button class="btn-round" onclick="app.cancelWorkout()" title="Отменить тренировку" aria-label="Отменить тренировку">
+            <img class="icon" src="./icons/x.svg" alt="">
+          </button>
+          <button class="btn-round" onclick="app.finishWorkout()" title="Завершить тренировку" aria-label="Завершить тренировку">
+            <img class="icon" src="./icons/stop.svg" alt="">
+          </button>
+        </div>
+      </div>
+      <button id="workoutScreenDayName" class="wk-title" onclick="app.openRenameWorkout()" title="Переименовать тренировку">День 1</button>
+
+      <div id="workoutExercisesContainer" class="ex-list"></div>
+
+      <button class="btn-pill btn-pill-lg wk-add" onclick="app.openExercisePicker('add')">
+        <img class="icon" src="./icons/plus.svg" alt="">Добавить упражнение
+      </button>
+    </section>
+
+    <!-- SCREEN (Figma: Workout/Create, Workout/Edit): создание и редактирование тренировки -->
+    <section id="viewDayEdit" class="view-screen edit-screen de-screen">
+      <div class="page-header page-header-sm">
+        <button class="btn-round" onclick="app.navigate('viewProgram')" title="Назад" aria-label="Назад">
+          <img class="icon" src="./icons/caret-left.svg" alt="">
+        </button>
+        <h2 id="dayEditTitle" class="page-title page-title-sm page-title-ellipsis">Новая тренировка</h2>
+      </div>
+
+      <div class="de-field">
+        <label class="de-label" for="dayEditName">Название</label>
+        <input id="dayEditName" class="de-input" type="text" maxlength="60" autocomplete="off" placeholder="Название тренировки" oninput="app.onDayNameInput(this)">
+      </div>
+
+      <div class="de-section">
+        <h3 class="de-section-title">Упражнения</h3>
+        <div id="dayEditList" class="de-list"></div>
+        <button class="btn-pill btn-pill-lg wk-add" onclick="app.openExercisePicker('day')">
+          Добавить упражнения<img class="icon" src="./icons/plus.svg" alt="">
+        </button>
+      </div>
+
+      <div class="bottom-action">
+        <button id="dayEditSave" class="btn-pill btn-pill-lg" onclick="app.saveDayEdit()" disabled>Создать тренировку</button>
+      </div>
+    </section>
+
+    <!-- SCREEN 4: История и Прогресс -->
+    <section id="viewHistory" class="view-screen">
+      <!-- Figma: History/List (Home). Для вкладки аналитики заголовок временно меняется на «График» -->
+      <div class="page-header">
+        <h1 id="historyTitle" class="page-title">История</h1>
+        <button id="btnHistorySettings" class="btn-round" onclick="app.navigate('viewSettings')" title="Настройки" aria-label="Настройки">
+          <img class="icon" src="./icons/faders-horizontal.svg" alt="">
+        </button>
+      </div>
+      <!-- Tab 1: Logs -->
+      <div id="subtabContentLogs">
+        <div id="logsHistoryList" class="history-list"></div>
+      </div>
+
+      <!-- Tab 2: Charts and PRs -->
+      <div id="subtabContentCharts" style="display: none;">
+        <div class="chart-controls-box">
+          <label class="de-label" for="chartExerciseSelect">Выберите упражнение для анализа</label>
+          <select id="chartExerciseSelect" class="custom-select" onchange="app.renderExerciseChartAndPR()"></select>
+        </div>
+
+        <div class="pr-summary-grid">
+          <div class="pr-card">
+            <div class="pr-card-val"><span id="prMaxWeightVal">0</span><span class="pr-unit">кг</span></div>
+            <div class="pr-card-lbl">Макс. вес</div>
+          </div>
+          <div class="pr-card">
+            <div class="pr-card-val"><span id="prEst1RMVal">0</span><span class="pr-unit">кг</span></div>
+            <div class="pr-card-lbl">Оценка 1RM</div>
+          </div>
+          <div class="pr-card">
+            <div class="pr-card-val"><span id="prMaxVolumeVal">0</span><span class="pr-unit">кг</span></div>
+            <div class="pr-card-lbl">Макс. объём</div>
+          </div>
+        </div>
+
+        <div class="tabs-text" role="tablist">
+          <button id="btnMetricWeight" class="tabs-text-item active" role="tab" onclick="app.setChartMetric('weight')">Макс. вес</button>
+          <button id="btnMetric1RM" class="tabs-text-item" role="tab" onclick="app.setChartMetric('1rm')">1RM</button>
+          <button id="btnMetricVolume" class="tabs-text-item" role="tab" onclick="app.setChartMetric('volume')">Объём</button>
+        </div>
+
+        <div class="chart-container-box">
+          <canvas id="progressChart" width="500" height="260"></canvas>
+          <div id="chartEmptyMessage" class="empty-state" style="display: none;">
+            <div class="empty-state-title">Нет записей по упражнению</div>
+            <div class="empty-state-desc">Завершите хотя бы одну тренировку с этим упражнением</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREEN (Figma: Workout/Edit): редактирование записи из истории -->
+    <section id="viewLogEdit" class="view-screen edit-screen">
+      <div class="page-header page-header-sm">
+        <button class="btn-round" onclick="app.navigate('viewHistory')" title="Назад" aria-label="Назад">
+          <img class="icon" src="./icons/caret-left.svg" alt="">
+        </button>
+        <h2 id="logEditTitle" class="page-title page-title-sm page-title-ellipsis"></h2>
+      </div>
+      <div id="logEditList" class="edit-list"></div>
+      <div class="bottom-action">
+        <button class="btn-pill btn-pill-lg" onclick="app.saveLogEdit()">Сохранить</button>
+      </div>
+    </section>
+
+    <!-- SCREEN 5: Настройки & Бэкап -->
+    <section id="viewSettings" class="view-screen">
+      <div class="page-header settings-header">
+        <button class="btn-round" onclick="app.navigate('viewHistory')" title="Назад" aria-label="Назад">
+          <img class="icon" src="./icons/caret-left.svg" alt="">
+        </button>
+        <h1 class="page-title">Настройки</h1>
+      </div>
+
+      <div class="settings-list">
+        <div class="settings-card">
+          <div class="settings-content">
+            <h3 class="settings-title">Резервная копия (JSON)</h3>
+            <div class="settings-desc">
+              <p>Данные хранятся только в этом браузере и никуда не отправляются. Сохраните их в файл на устройстве.</p>
+              <p>Раз в пару недель делайте экспорт: если очистить данные браузера или сменить телефон, данные пропадут.</p>
+              <p id="backupInfo"></p>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button class="btn-pill btn-pill-dark" onclick="app.exportDataJSON()">Экспорт</button>
+            <label class="btn-pill">
+              Импорт
+              <input type="file" id="importFileInput" accept=".json" style="display: none;" onchange="app.importDataJSON(event)">
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-content">
+            <h3 class="settings-title">Очистка данных</h3>
+            <div class="settings-desc"><p>Полное удаление всех программ и истории</p></div>
+          </div>
+          <div class="settings-actions">
+            <button class="btn-pill btn-pill-dark" onclick="app.clearAllData()">Очистить всю базу данных</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" id="navItemProgram" onclick="app.navigate('viewProgram')" title="Тренировки" aria-label="Тренировки">
+      <img class="icon icon-36" src="./icons/barbell.svg" alt="">
+    </button>
+    <button class="nav-item" id="navItemHome" onclick="app.openHome()" title="Главная" aria-label="Главная">
+      <img class="icon icon-36" src="./icons/house.svg" alt="">
+    </button>
+    <button class="nav-item" id="navItemAnalytics" onclick="app.openAnalytics()" title="Аналитика" aria-label="Аналитика">
+      <img class="icon icon-36" src="./icons/chart-bar.svg" alt="">
+    </button>
+  </nav>
+
+  <!-- Результаты тренировки (Figma: Flow/04 Workout/Complete) -->
+  <div id="workoutComplete" class="complete-screen" role="dialog" aria-modal="true" aria-labelledby="completeTitle">
+    <div class="complete-inner">
+      <div class="complete-top">
+        <div class="complete-badge"><img class="icon icon-36" src="./icons/fire.svg" alt=""></div>
+        <h2 id="completeTitle" class="complete-title">Ты молодец!</h2>
+        <p class="complete-sub">Тренировка завершена</p>
+      </div>
+
+      <div class="complete-info">
+        <div class="complete-info-row"><span class="complete-bullet"></span><span id="completeDate">—</span></div>
+        <div class="complete-info-row"><span class="complete-bullet"></span><span id="completeTime">—</span></div>
+      </div>
+
+      <div class="complete-grid">
+        <div class="complete-stat"><div id="completeExercises" class="complete-stat-val">0</div><div id="completeExercisesLbl" class="complete-stat-lbl">упражнений</div></div>
+        <div class="complete-stat"><div id="completeSets" class="complete-stat-val">0</div><div id="completeSetsLbl" class="complete-stat-lbl">подходов</div></div>
+        <div class="complete-stat"><div id="completeTonnage" class="complete-stat-val">0 кг</div><div class="complete-stat-lbl">тоннаж</div></div>
+        <div class="complete-stat"><div id="completeDuration" class="complete-stat-val">—</div><div class="complete-stat-lbl">длительность</div></div>
+      </div>
+
+      <div id="completeRecords" class="complete-records"></div>
+
+      <button class="btn-pill btn-pill-lg complete-done" onclick="app.closeWorkoutComplete()">Готово</button>
+    </div>
+  </div>
+
+  <!-- Нижняя шторка подтверждения (Figma: BottomSheet/ConfirmDelete) -->
+  <div id="confirmSheet" class="sheet-backdrop" onclick="app.cancelConfirmSheet()">
+    <div class="sheet" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="confirmSheetTitle">
+      <div class="sheet-handle"></div>
+      <div class="sheet-content">
+        <h3 id="confirmSheetTitle" class="sheet-title"></h3>
+        <p id="confirmSheetText" class="sheet-text"></p>
+      </div>
+      <div id="confirmSheetStats" class="sheet-stats" hidden></div>
+      <div class="sheet-actions">
+        <button id="confirmSheetCancel" class="btn-pill" onclick="app.cancelConfirmSheet()">Отмена</button>
+        <button id="confirmSheetOk" class="btn-pill btn-pill-dark" onclick="app.runConfirmSheet()"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шторка: название текущей тренировки (Figma: BottomSheet) -->
+  <div id="renameWorkoutModal" class="sheet-backdrop" onclick="app.closeModal('renameWorkoutModal')">
+    <div class="sheet sheet-form" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="renameWorkoutTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="renameWorkoutTitle" class="sheet-title">Название тренировки</h3>
+      <div class="de-field">
+        <label class="de-label" for="modalWorkoutName">Название (только для этой тренировки)</label>
+        <input type="text" id="modalWorkoutName" class="de-input" maxlength="60" autocomplete="off" placeholder="Например: Вторник">
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill" onclick="app.closeModal('renameWorkoutModal')">Отмена</button>
+        <button class="btn-pill btn-pill-dark" onclick="app.saveWorkoutName()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шторка: параметры упражнения в активной тренировке -->
+  <div id="exerciseModal" class="sheet-backdrop" onclick="app.closeModal('exerciseModal')">
+    <div class="sheet sheet-form" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="exerciseModalTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="exerciseModalTitle" class="sheet-title">Упражнение</h3>
+      <input type="hidden" id="modalExId">
+      <div class="de-field">
+        <label class="de-label" for="modalExName">Название упражнения</label>
+        <input type="text" id="modalExName" class="de-input" autocomplete="off" readonly>
+      </div>
+      <div class="sheet-row">
+        <div class="de-field">
+          <label class="de-label" for="modalExSets">Целевые подходы</label>
+          <input type="number" id="modalExSets" class="de-input" value="3" min="1" max="20">
+        </div>
+        <div class="de-field">
+          <label class="de-label" for="modalExReps">Целевые повторы</label>
+          <input type="text" id="modalExReps" class="de-input" value="8-10" placeholder="8-12 или 10">
+        </div>
+      </div>
+      <div class="de-field">
+        <label class="de-label" for="modalExNotes">Заметка / техника (опционально)</label>
+        <input type="text" id="modalExNotes" class="de-input" placeholder="Например: С паузой внизу 1 сек">
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill" onclick="app.closeModal('exerciseModal')">Отмена</button>
+        <button class="btn-pill btn-pill-dark" onclick="app.saveExerciseFromModal()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Выбор упражнения для добавления/замены (Figma: ExercisePicker/SheetOpen-A) -->
+  <div id="exercisePicker" class="sheet-backdrop" onclick="app.closeExercisePicker()">
+    <div class="sheet pk-sheet" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-label="Выбор упражнения">
+      <div class="sheet-handle"></div>
+      <div class="pk-header">
+        <label class="pk-search">
+          <img class="icon" src="./icons/magnifying-glass.svg" alt="">
+          <input id="pickerSearch" type="text" class="pk-search-input" placeholder="Поиск" autocomplete="off" enterkeyhint="search" oninput="app.onPickerInput(this)" aria-label="Поиск упражнения">
+          <button id="pickerClear" type="button" class="pk-clear" hidden onclick="app.clearPickerSearch()" title="Очистить" aria-label="Очистить">
+            <img class="icon" src="./icons/x.svg" alt="">
+          </button>
+        </label>
+        <button type="button" class="btn-round pk-add" onclick="app.addCustomPickerExercise()" title="Создать упражнение" aria-label="Создать упражнение">
+          <img class="icon" src="./icons/plus.svg" alt="">
+        </button>
+      </div>
+      <div id="pickerList" class="pk-list"></div>
+      <div class="pk-footer">
+        <button id="pickerConfirm" type="button" class="btn-pill btn-pill-dark pk-confirm" hidden onclick="app.confirmExercisePicker()">Добавить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шторка: история упражнения -->
+  <div id="exerciseHistoryModal" class="sheet-backdrop" onclick="app.closeModal('exerciseHistoryModal')">
+    <div class="sheet sheet-scroll" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="exerciseHistoryTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="exerciseHistoryTitle" class="sheet-title">История упражнения</h3>
+      <div id="exerciseHistoryBody" class="sheet-body"></div>
+      <div class="sheet-actions">
+        <button class="btn-pill btn-pill-dark" onclick="app.closeModal('exerciseHistoryModal')">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
