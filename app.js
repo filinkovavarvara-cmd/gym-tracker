@@ -43,8 +43,14 @@ class GymApp {
   loadData() {
     try {
       const storedProgs = localStorage.getItem(STORAGE_KEYS.PROGRAMS);
-      this.programs = storedProgs ? JSON.parse(storedProgs) : [DEFAULT_PROGRAM];
-      if (!storedProgs) this.savePrograms();
+      if (storedProgs) {
+        this.programs = JSON.parse(storedProgs);
+      } else {
+        // Первый запуск: создаём программу с шаблонными тренировками
+        const defaultProgram = { ...DEFAULT_PROGRAM, days: this.createDefaultDays() };
+        this.programs = [defaultProgram];
+        this.savePrograms();
+      }
 
       const curId = localStorage.getItem(STORAGE_KEYS.CURRENT_PROGRAM_ID);
       this.currentProgramId = curId || (this.programs[0] ? this.programs[0].id : null);
@@ -64,6 +70,57 @@ class GymApp {
       this.workoutLogs = [];
     }
   }
+
+  createDefaultDays() {
+    return [
+      {
+        id: 'day-chest',
+        name: 'Грудь',
+        exercises: [
+          { id: 'ex-bp', name: 'Жим штанги лёжа', targetSets: 4, targetReps: '6-8', targetWeight: 0, notes: '' },
+          { id: 'ex-bdb', name: 'Разведение гантелей лёжа', targetSets: 3, targetReps: '8-10', targetWeight: 0, notes: '' },
+          { id: 'ex-pfd', name: 'Отжимания на брусьях', targetSets: 3, targetReps: '8-12', targetWeight: 0, notes: '' }
+        ]
+      },
+      {
+        id: 'day-back',
+        name: 'Спина',
+        exercises: [
+          { id: 'ex-dlt', name: 'Становая тяга', targetSets: 4, targetReps: '4-6', targetWeight: 0, notes: '' },
+          { id: 'ex-pdl', name: 'Подтягивания', targetSets: 3, targetReps: '6-10', targetWeight: 0, notes: '' },
+          { id: 'ex-grd', name: 'Горизонтальная тяга', targetSets: 3, targetReps: '8-10', targetWeight: 0, notes: '' }
+        ]
+      },
+      {
+        id: 'day-legs',
+        name: 'Ноги',
+        exercises: [
+          { id: 'ex-sq', name: 'Приседания со штангой', targetSets: 4, targetReps: '6-8', targetWeight: 0, notes: '' },
+          { id: 'ex-leg-press', name: 'Жим ногами', targetSets: 3, targetReps: '8-10', targetWeight: 0, notes: '' },
+          { id: 'ex-leg-curl', name: 'Сгибание ног сидя', targetSets: 3, targetReps: '10-12', targetWeight: 0, notes: '' }
+        ]
+      },
+      {
+        id: 'day-shoulders',
+        name: 'Плечи',
+        exercises: [
+          { id: 'ex-sh-press', name: 'Жим штанги с плеч', targetSets: 4, targetReps: '6-8', targetWeight: 0, notes: '' },
+          { id: 'ex-lat-raise', name: 'Разведение гантелей в стороны', targetSets: 3, targetReps: '10-12', targetWeight: 0, notes: '' },
+          { id: 'ex-face-pull', name: 'Тяга к лицу', targetSets: 3, targetReps: '12-15', targetWeight: 0, notes: '' }
+        ]
+      },
+      {
+        id: 'day-arms',
+        name: 'Руки',
+        exercises: [
+          { id: 'ex-barbell-curl', name: 'Подъём штанги на бицепс', targetSets: 3, targetReps: '8-10', targetWeight: 0, notes: '' },
+          { id: 'ex-tricep-dips', name: 'Отжимания на трицепс', targetSets: 3, targetReps: '8-10', targetWeight: 0, notes: '' },
+          { id: 'ex-hammer-curl', name: 'Подъём гантелей молотком', targetSets: 3, targetReps: '10-12', targetWeight: 0, notes: '' }
+        ]
+      }
+    ];
+  }
+
 
   savePrograms() {
     localStorage.setItem(STORAGE_KEYS.PROGRAMS, JSON.stringify(this.programs));
@@ -182,10 +239,20 @@ class GymApp {
     }
 
     let html = '';
-    prog.days.forEach((day) => {
+    prog.days.forEach((day, index) => {
+      // Пропускаем активную тренировку - она уже отображена в баннере
+      if (this.activeWorkout && day.id === this.activeWorkout.dayId) {
+        return;
+      }
+      
       const exCount = day.exercises ? day.exercises.length : 0;
       html += `
-        <div class="workout-card" onclick="app.startWorkout('${day.id}')">
+        <div class="workout-card" draggable="true" data-day-id="${day.id}" 
+             ondragstart="app.onDragStart(event)" 
+             ondragover="app.onDragOver(event)" 
+             ondrop="app.onDrop(event, '${day.id}')" 
+             ondragend="app.onDragEnd(event)"
+             onclick="app.startWorkout('${day.id}')">
           <div class="workout-card-header">
             <div class="workout-card-title">${this.escapeHtml(day.name)}</div>
             <button class="card-menu-btn" onclick="app.toggleCardMenu(event, '${day.id}')" title="Меню" aria-label="Меню">
@@ -205,6 +272,57 @@ class GymApp {
       `;
     });
     container.innerHTML = html;
+  }
+
+  draggedElement = null;
+
+  onDragStart(e) {
+    this.draggedElement = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.style.opacity = '0.5';
+  }
+
+  onDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const card = e.currentTarget;
+    if (card !== this.draggedElement) {
+      card.style.borderTop = '2px solid #ff5722';
+    }
+  }
+
+  onDrop(e, targetDayId) {
+    e.preventDefault();
+    if (!this.draggedElement || this.draggedElement.dataset.dayId === targetDayId) {
+      return;
+    }
+    
+    const prog = this.getCurrentProgram();
+    if (!prog || !prog.days) return;
+
+    const allDays = prog.days;
+    const draggedDayId = this.draggedElement.dataset.dayId;
+    const fromIndex = allDays.findIndex(d => d.id === draggedDayId);
+    const toIndex = allDays.findIndex(d => d.id === targetDayId);
+
+    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
+      const [movedDay] = allDays.splice(fromIndex, 1);
+      allDays.splice(toIndex, 0, movedDay);
+      this.savePrograms();
+      this.renderHome();
+    }
+  }
+
+  onDragEnd(e) {
+    if (this.draggedElement) {
+      this.draggedElement.style.opacity = '1';
+      this.draggedElement.style.borderTop = '';
+    }
+    document.querySelectorAll('.workout-card').forEach(card => {
+      card.style.borderTop = '';
+      card.style.opacity = '1';
+    });
+    this.draggedElement = null;
   }
 
   escapeHtml(value) {
@@ -248,7 +366,7 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Удалить тренировку?',
       text: 'Тренировочный день и все его упражнения будут удалены.',
-      okLabel: 'Удалить тренировку',
+      okLabel: 'Удалить',
       onOk: () => {
         const prog = this.getCurrentProgram();
         prog.days = prog.days.filter(d => d.id !== dayId);
@@ -356,7 +474,7 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Удалить упражнение?',
       text: 'Упражнение будет удалено из этой тренировки.',
-      okLabel: 'Удалить упражнение',
+      okLabel: 'Удалить',
       onOk: () => {
         if (!this.dayDraft) return;
         this.dayDraft.exercises.splice(index, 1);
@@ -491,8 +609,8 @@ class GymApp {
       this.openConfirmSheet({
         title: 'Завершить текущую тренировку?',
         text: 'Сейчас идёт другая тренировка. Если продолжить новую, текущая будет завершена и сохранена.',
-        okLabel: 'Завершить и начать',
-        cancelLabel: 'Продолжить текущую',
+        okLabel: 'Завершить',
+        cancelLabel: 'Отмена',
         onOk: () => {
           const records = this.getWorkoutRecords(this.activeWorkout);
           const workout = this.activeWorkout;
@@ -521,8 +639,8 @@ class GymApp {
       this.openConfirmSheet({
         title: 'Начать новую тренировку?',
         text: 'У вас есть незавершённая тренировка. При старте новой она будет удалена.',
-        okLabel: 'Начать заново',
-        cancelLabel: 'Продолжить',
+        okLabel: 'Начать',
+        cancelLabel: 'Отмена',
         onOk: () => {
           this.activeWorkout = null;
           this.startWorkout(dayId);
@@ -848,7 +966,7 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Удалить упражнение?',
       text,
-      okLabel: 'Удалить упражнение',
+      okLabel: 'Удалить',
       onOk: () => {
         if (!this.activeWorkout) return;
         const list = this.getActiveExercises();
@@ -1270,7 +1388,7 @@ class GymApp {
         `${this.formatInt(st.tonnage)} кг`
       ],
       okLabel: 'Завершить',
-      cancelLabel: 'Продолжить',
+      cancelLabel: 'Отмена',
       onOk: () => this.commitFinishWorkout()
     });
   }
@@ -1356,8 +1474,8 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Отменить тренировку?',
       text: 'Текущий прогресс будет потерян без возможности восстановления.',
-      okLabel: 'Отменить тренировку',
-      cancelLabel: 'Назад',
+      okLabel: 'Отменить',
+      cancelLabel: 'Отмена',
       onOk: () => {
         this.activeWorkout = null;
         this.saveActiveWorkout();
@@ -1493,7 +1611,7 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Удалить тренировку?',
       text: 'Тренировка и её результаты будут удалены без возможности восстановления.',
-      okLabel: 'Удалить тренировку',
+      okLabel: 'Удалить',
       onOk: () => {
         this.workoutLogs = this.workoutLogs.filter(l => l.id !== logId);
         this.saveWorkoutLogs();
@@ -1665,7 +1783,7 @@ class GymApp {
     this.openConfirmSheet({
       title: 'Удалить упражнение?',
       text: 'Упражнение и все его подходы будут удалены из текущей тренировки.',
-      okLabel: 'Удалить упражнение',
+      okLabel: 'Удалить',
       onOk: () => {
         if (!this.logEdit) return;
         this.logEdit.items.splice(index, 1);
