@@ -122,14 +122,12 @@ body {
 .card-menu-item:active { background: var(--white-20); }
 .card-menu-item-danger { color: var(--white-100); }
 
-/* Баннер незавершённой тренировки */
-.active-banner {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px;
-  background: var(--color-surface); border: 1px solid var(--white-50); border-radius: var(--r-24);
-  padding: 16px; cursor: pointer;
+/* Карточка текущей тренировки: в списке стоит как обычная карточка, но с рамкой и значком «играть» */
+.workout-card.active-card {
+  flex-direction: row; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 16px; box-shadow: inset 0 0 0 1px var(--white-50);
 }
 .active-banner-label { font-size: 14px; line-height: 24px; color: var(--white-50); }
-.active-banner + .workout-list { margin-top: var(--gap); }
 
 /* Pill buttons (Figma: Button/Cancel, Button/Delete, Create workout button) */
 .btn-pill {
@@ -266,6 +264,12 @@ body {
 
 /* Workout/Create и Workout/Edit: название, список упражнений, кнопка внизу */
 .de-screen .page-header { gap: 12px; margin-bottom: 32px; }
+/* Название по центру между кнопками «назад» и «порядок»; нажатие открывает шторку переименования */
+.de-screen .page-header .de-title {
+  flex: 1 1 0; text-align: center; background: transparent; border: none; padding: 0; margin: 0;
+  font-family: inherit; font-weight: 590; color: var(--white-100); cursor: pointer;
+}
+.de-screen .page-header .de-title.is-empty { color: var(--white-50); }
 .de-field { display: flex; flex-direction: column; gap: var(--gap); margin-bottom: 32px; }
 .de-label { font-size: 14px; line-height: 24px; color: var(--white-80); }
 .de-input {
@@ -403,3 +407,76 @@ canvas#progressChart { display: block; width: 100% !important; height: 220px !im
 .complete-done { margin-top: auto; }
 .complete-records:empty { display: none; }
 .complete-inner > .complete-done { flex: none; }
+
+/* Шапка с несколькими кнопками справа */
+.header-actions { display: flex; align-items: center; gap: var(--gap); flex: none; }
+.wk-reorder { grid-column: 3; justify-self: end; }
+.btn-round.active { background: var(--white-100); }
+.btn-round.active .icon { filter: brightness(0); }
+.page-header-sm .btn-round:last-child:not(:first-child) { margin-left: auto; }
+
+/* Режим перестановки: карточки двигаются пальцем (зажать и потянуть) */
+.reorder-on > .workout-card, .reorder-on > .ex-card, .reorder-on > .edit-card {
+  box-shadow: inset 0 0 0 1px var(--white-20); cursor: grab; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+}
+/* Содержимое карточек в этом режиме не кликабельно: карточку можно только переместить */
+.reorder-on > .workout-card *, .reorder-on > .ex-card *, .reorder-on > .edit-card * { pointer-events: none !important; }
+.reorder-on > .dragging {
+  position: relative; z-index: 30; cursor: grabbing; transition: none !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--white-100);
+}
+body.reorder-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+
+/* Примечания к упражнениям */
+.note-input {
+  width: 100%; height: 40px; padding: 8px 16px; border: 1px solid var(--white-50); border-radius: var(--r-100);
+  background: transparent; color: var(--white-100); font-family: inherit; font-size: 14px; line-height: 20px; outline: none;
+}
+.note-input::placeholder { color: var(--white-50); opacity: 1; }
+.note-input:focus { background: var(--white-20); border-color: var(--white-100); }
+.de-textarea { height: auto; min-height: 112px; padding: 12px 20px; border-radius: var(--r-24); resize: none; }
+
+/* История: упражнения, подходы, кнопка графика */
+.history-card-details { display: none; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--white-20); }
+.history-card-details.open { display: flex; flex-direction: column; }
+.history-exercise-detail { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 16px 0; font-size: 14px; }
+.history-exercise-detail + .history-exercise-detail { border-top: 1px solid var(--white-20); }
+.history-exercise-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.history-exercise-name { font-size: 16px; line-height: 24px; font-weight: 590; color: var(--white-100); overflow-wrap: anywhere; }
+.history-exercise-note { font-size: 14px; line-height: 20px; font-style: italic; color: var(--white-80); overflow-wrap: anywhere; }
+.history-chart-btn {
+  width: 36px; height: 36px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--neutral-500); border: none; border-radius: var(--r-100); cursor: pointer;
+}
+.history-chart-btn:active { transform: scale(0.92); }
+.history-sets { display: flex; flex-direction: column; gap: 6px; }
+.history-set-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 14px; line-height: 20px; }
+.history-set-val { color: var(--white-100); }
+.history-set-count { color: var(--white-50); white-space: nowrap; }
+.history-card-details .exercise-notes { margin-top: 0; padding-top: 16px; border-top: 1px solid var(--white-20); }
+
+/* Аналитика: кастомный выбор упражнения (шторка), пояснения, подписи осей */
+button.custom-select { display: flex; align-items: center; text-align: left; }
+.custom-select-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-list { gap: 0; }
+.cp-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 16px 0;
+  background: transparent; border: none; border-top: 1px solid var(--white-20); color: var(--white-100);
+  font-family: inherit; font-size: 18px; line-height: 24px; text-align: left; cursor: pointer;
+}
+.cp-row:first-child { border-top: none; }
+.cp-row:active { opacity: 0.6; }
+.cp-row.selected { font-weight: 590; }
+.cp-name { overflow-wrap: anywhere; }
+.pr-card { position: relative; }
+.info-btn {
+  position: absolute; top: 12px; right: 12px; width: 32px; height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; background: transparent; border: none;
+  border-radius: var(--r-100); cursor: pointer; opacity: 0.6;
+}
+.info-btn:active { opacity: 1; }
+.chart-legend { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; font-size: 13px; line-height: 18px; color: var(--white-80); }
+.chart-legend-key { color: var(--white-50); }
+.chart-container-box canvas#progressChart { height: 240px !important; }
+canvas#progressChart { height: 240px !important; }
+

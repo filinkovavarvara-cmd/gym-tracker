@@ -27,18 +27,14 @@
     <section id="viewProgram" class="view-screen active">
       <div class="page-header">
         <h1 class="page-title">Тренировки</h1>
-        <button class="btn-round" onclick="app.openDayEdit()" title="Добавить тренировку" aria-label="Добавить тренировку">
-          <img class="icon" src="./icons/plus.svg" alt="">
-        </button>
-      </div>
-
-      <div id="activeWorkoutBanner" class="active-banner" style="display: none;" onclick="app.resumeActiveWorkout()">
-        <div class="active-banner-info">
-          <div class="active-banner-label">Идёт тренировка</div>
-          <div id="activeBannerDayName" class="workout-card-title">День 1</div>
-          <div id="activeBannerTime" class="workout-card-meta">Начата: —</div>
+        <div class="header-actions">
+          <button id="btnReorderList" class="btn-round" onclick="app.toggleReorder('list')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
+            <img class="icon" src="./icons/arrows-down-up.svg" alt="">
+          </button>
+          <button class="btn-round" onclick="app.openDayEdit()" title="Добавить тренировку" aria-label="Добавить тренировку">
+            <img class="icon" src="./icons/plus.svg" alt="">
+          </button>
         </div>
-        <img class="icon" src="./icons/play.svg" alt="">
       </div>
 
       <div id="workoutsList" class="workout-list"></div>
@@ -56,6 +52,9 @@
           <span class="wk-dot"></span>
           <span id="workoutScreenWeekday">—</span>
         </div>
+        <button id="btnReorderWorkout" class="btn-round wk-reorder" onclick="app.toggleReorder('workout')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
+          <img class="icon" src="./icons/arrows-down-up.svg" alt="">
+        </button>
       </div>
       <div class="wk-timer-row">
         <div id="workoutClock" class="wk-timer" aria-live="off">0:00</div>
@@ -83,12 +82,10 @@
         <button class="btn-round" onclick="app.navigate('viewProgram')" title="Назад" aria-label="Назад">
           <img class="icon" src="./icons/caret-left.svg" alt="">
         </button>
-        <h2 id="dayEditTitle" class="page-title page-title-sm page-title-ellipsis">Новая тренировка</h2>
-      </div>
-
-      <div class="de-field">
-        <label class="de-label" for="dayEditName">Название</label>
-        <input id="dayEditName" class="de-input" type="text" maxlength="60" autocomplete="off" placeholder="Название тренировки" oninput="app.onDayNameInput(this)">
+        <button id="dayEditTitle" class="page-title page-title-sm page-title-ellipsis de-title" onclick="app.openDayNameSheet()" title="Изменить название" aria-label="Изменить название">Новая тренировка</button>
+        <button id="btnReorderDay" class="btn-round" onclick="app.toggleReorder('day')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
+          <img class="icon" src="./icons/arrows-down-up.svg" alt="">
+        </button>
       </div>
 
       <div class="de-section">
@@ -121,20 +118,31 @@
       <!-- Tab 2: Charts and PRs -->
       <div id="subtabContentCharts" style="display: none;">
         <div class="chart-controls-box">
-          <label class="de-label" for="chartExerciseSelect">Выберите упражнение для анализа</label>
-          <select id="chartExerciseSelect" class="custom-select" onchange="app.renderExerciseChartAndPR()"></select>
+          <label class="de-label" for="chartExerciseBtn">Выберите упражнение для анализа</label>
+          <button id="chartExerciseBtn" type="button" class="custom-select" onclick="app.openChartPicker()" aria-haspopup="dialog">
+            <span id="chartExerciseLabel" class="custom-select-label">Нет доступных упражнений</span>
+          </button>
         </div>
 
         <div class="pr-summary-grid">
           <div class="pr-card">
+            <button class="info-btn" onclick="app.showInfo('maxWeight')" title="Что это?" aria-label="Что такое «Макс. вес»">
+              <img class="icon icon-20" src="./icons/info.svg" alt="">
+            </button>
             <div class="pr-card-val"><span id="prMaxWeightVal">0</span><span class="pr-unit">кг</span></div>
             <div class="pr-card-lbl">Макс. вес</div>
           </div>
           <div class="pr-card">
+            <button class="info-btn" onclick="app.showInfo('est1rm')" title="Что это?" aria-label="Что такое «Оценка 1RM»">
+              <img class="icon icon-20" src="./icons/info.svg" alt="">
+            </button>
             <div class="pr-card-val"><span id="prEst1RMVal">0</span><span class="pr-unit">кг</span></div>
             <div class="pr-card-lbl">Оценка 1RM</div>
           </div>
           <div class="pr-card">
+            <button class="info-btn" onclick="app.showInfo('maxVolume')" title="Что это?" aria-label="Что такое «Макс. объём»">
+              <img class="icon icon-20" src="./icons/info.svg" alt="">
+            </button>
             <div class="pr-card-val"><span id="prMaxVolumeVal">0</span><span class="pr-unit">кг</span></div>
             <div class="pr-card-lbl">Макс. объём</div>
           </div>
@@ -147,6 +155,10 @@
         </div>
 
         <div class="chart-container-box">
+          <div id="chartLegend" class="chart-legend">
+            <div><span class="chart-legend-key">По вертикали:</span> <span id="chartLegendY">максимальный вес за тренировку, кг</span></div>
+            <div><span class="chart-legend-key">По горизонтали:</span> дата тренировки</div>
+          </div>
           <canvas id="progressChart" width="500" height="260"></canvas>
           <div id="chartEmptyMessage" class="empty-state" style="display: none;">
             <div class="empty-state-title">Нет записей по упражнению</div>
@@ -268,6 +280,22 @@
     </div>
   </div>
 
+  <!-- Шторка: название тренировки в редакторе (Figma: BottomSheet) -->
+  <div id="dayNameModal" class="sheet-backdrop" onclick="app.closeModal('dayNameModal')">
+    <div class="sheet sheet-form" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="dayNameTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="dayNameTitle" class="sheet-title">Название тренировки</h3>
+      <div class="de-field">
+        <label class="de-label" for="dayNameInput">Название</label>
+        <input type="text" id="dayNameInput" class="de-input" maxlength="60" autocomplete="off" placeholder="Например: Грудь и трицепс" onkeydown="if (event.key === 'Enter') app.saveDayName()">
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill" onclick="app.closeModal('dayNameModal')">Отмена</button>
+        <button class="btn-pill btn-pill-dark" onclick="app.saveDayName()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Шторка: название текущей тренировки (Figma: BottomSheet) -->
   <div id="renameWorkoutModal" class="sheet-backdrop" onclick="app.closeModal('renameWorkoutModal')">
     <div class="sheet sheet-form" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="renameWorkoutTitle">
@@ -346,6 +374,46 @@
       <div id="exerciseHistoryBody" class="sheet-body"></div>
       <div class="sheet-actions">
         <button class="btn-pill btn-pill-dark" onclick="app.closeModal('exerciseHistoryModal')">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шторка: примечание к упражнению в активной тренировке -->
+  <div id="noteModal" class="sheet-backdrop" onclick="app.closeModal('noteModal')">
+    <div class="sheet sheet-form" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="noteModalTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="noteModalTitle" class="sheet-title">Примечание</h3>
+      <input type="hidden" id="noteExId">
+      <div class="de-field">
+        <label id="noteExName" class="de-label" for="noteText">Упражнение</label>
+        <textarea id="noteText" class="de-input de-textarea" maxlength="300" rows="4" placeholder="Например: с паузой внизу 1 сек, хват уже"></textarea>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill" onclick="app.closeModal('noteModal')">Отмена</button>
+        <button class="btn-pill btn-pill-dark" onclick="app.saveExerciseNote()">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шторка: выбор упражнения для графика -->
+  <div id="chartPickerSheet" class="sheet-backdrop" onclick="app.closeModal('chartPickerSheet')">
+    <div class="sheet sheet-scroll" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="chartPickerTitle">
+      <div class="sheet-handle"></div>
+      <h3 id="chartPickerTitle" class="sheet-title">Упражнение</h3>
+      <div id="chartPickerList" class="sheet-body cp-list" role="listbox"></div>
+    </div>
+  </div>
+
+  <!-- Шторка: пояснение к показателю -->
+  <div id="infoSheet" class="sheet-backdrop" onclick="app.closeModal('infoSheet')">
+    <div class="sheet" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="infoSheetTitle">
+      <div class="sheet-handle"></div>
+      <div class="sheet-content">
+        <h3 id="infoSheetTitle" class="sheet-title"></h3>
+        <p id="infoSheetText" class="sheet-text"></p>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill btn-pill-dark" onclick="app.closeModal('infoSheet')">Понятно</button>
       </div>
     </div>
   </div>

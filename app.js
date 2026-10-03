@@ -1,4 +1,4 @@
-﻿// GymTracker Core Engine - Part 1
+// GymTracker Core Engine - Part 1
 const STORAGE_KEYS = {
   PROGRAMS: 'gym_programs_v1',
   CURRENT_PROGRAM_ID: 'gym_current_program_id_v1',
@@ -27,6 +27,12 @@ class GymApp {
     this.historyTab = 'logs';
     this.logEdit = null;
     this.dayDraft = null;
+    // Режим перестановки (карточки двигаются пальцем: зажать и потянуть)
+    this.reorder = { list: false, workout: false, day: false };
+    this.reorderDrag = null;
+    // Упражнение, выбранное на вкладке графиков
+    this.chartExerciseId = null;
+    this.chartPickerQuery = '';
     this.confirmAction = null;
     this.confirmCancel = null;
   }
@@ -34,6 +40,7 @@ class GymApp {
   init() {
     this.loadData();
     document.addEventListener('click', () => this.closeCardMenu());
+    this.initReorderDrag();
     this.renderHome();
     this.renderHistory();
     this.initServiceWorker();
@@ -148,6 +155,7 @@ class GymApp {
   }
 
   navigate(viewId) {
+    this.resetReorder();
     document.querySelectorAll('.view-screen').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
     this.closeCardMenu();
@@ -216,48 +224,57 @@ class GymApp {
     const container = document.getElementById('workoutsList');
     if (!container) return;
 
-    // Баннер незавершённой тренировки
-    const banner = document.getElementById('activeWorkoutBanner');
-    if (this.activeWorkout) {
-      const activeDay = prog && prog.days.find(d => d.id === this.activeWorkout.dayId);
-      document.getElementById('activeBannerDayName').innerText = this.activeWorkout.dayName || (activeDay ? activeDay.name : 'Текущая тренировка');
-      const bannerTime = document.getElementById('activeBannerTime');
-      if (bannerTime) bannerTime.innerText = `Начата: ${this.formatDateTime(this.activeWorkout.date)}`;
-      banner.style.display = 'flex';
-    } else {
-      banner.style.display = 'none';
-    }
+    // Текущая тренировка показывается карточкой прямо в списке, её тоже можно перемещать
+    const activeId = this.activeWorkout ? this.activeWorkout.dayId : null;
+    const activeInList = !!(activeId && prog && prog.days && prog.days.some(d => d.id === activeId));
 
     if (!prog || !prog.days || prog.days.length === 0) {
-      container.innerHTML = `
+      if (!this.activeWorkout) {
+        container.innerHTML = `
         <div class="empty-state">
           <div class="empty-state-title">Пока нет тренировок</div>
           <div class="empty-state-desc">Нажмите «+», чтобы добавить первую тренировку.</div>
         </div>
       `;
-      return;
-    }
-
-    let html = '';
-    prog.days.forEach((day, index) => {
-      // Пропускаем активную тренировку - она уже отображена в баннере
-      if (this.activeWorkout && day.id === this.activeWorkout.dayId) {
         return;
       }
-      
+    }
+
+    const rm = this.reorder.list;
+    container.classList.toggle('reorder-on', rm);
+    const dragAttrs = (id) => `data-day-id="${id}"`;
+    const activeCard = (id, name) => `
+        <div class="workout-card active-card" ${dragAttrs(id)}
+             onclick="${rm ? '' : 'app.resumeActiveWorkout()'}">
+          <div class="active-banner-info">
+            <div class="active-banner-label">Идёт тренировка</div>
+            <div class="workout-card-title">${this.escapeHtml(name)}</div>
+            <div class="workout-card-meta">Начата: ${this.formatDateTime(this.activeWorkout.date)}</div>
+          </div>
+          <img class="icon" src="./icons/play.svg" alt="">
+        </div>
+      `;
+
+    let html = '';
+    // Если шаблона дня уже нет в программе, карточка текущей тренировки стоит первой
+    if (this.activeWorkout && !activeInList) {
+      html += activeCard(activeId || '', this.activeWorkout.dayName || 'Текущая тренировка');
+    }
+    ((prog && prog.days) || []).forEach((day, index) => {
+      if (this.activeWorkout && day.id === activeId) {
+        html += activeCard(day.id, this.activeWorkout.dayName || day.name);
+        return;
+      }
+
       const exCount = day.exercises ? day.exercises.length : 0;
       html += `
-        <div class="workout-card" draggable="true" data-day-id="${day.id}" 
-             ondragstart="app.onDragStart(event)" 
-             ondragover="app.onDragOver(event)" 
-             ondrop="app.onDrop(event, '${day.id}')" 
-             ondragend="app.onDragEnd(event)"
-             onclick="!app.isDragging && app.startWorkout('${day.id}')" style="cursor: grab;">
+        <div class="workout-card" ${dragAttrs(day.id)}
+             onclick="${rm ? '' : `app.startWorkout('${day.id}')`}">
           <div class="workout-card-header">
             <div class="workout-card-title">${this.escapeHtml(day.name)}</div>
-            <button class="card-menu-btn" onclick="app.toggleCardMenu(event, '${day.id}')" title="Меню" aria-label="Меню">
+            ${rm ? '' : `<button class="card-menu-btn" onclick="app.toggleCardMenu(event, '${day.id}')" title="Меню" aria-label="Меню">
               <img class="icon" src="./icons/dots-three.svg" alt="">
-            </button>
+            </button>`}
           </div>
           <div class="workout-card-meta">${this.pluralExercises(exCount)}</div>
           <div class="card-menu" id="cardMenu-${day.id}" onclick="event.stopPropagation()">
@@ -272,169 +289,6 @@ class GymApp {
       `;
     });
     container.innerHTML = html;
-  }
-
-  draggedElement = null;
-  isDragging = false;
-
-  onDragStart(e) {
-    this.isDragging = true;
-    this.draggedElement = e.currentTarget;
-    e.dataTransfer.effectAllowed = 'move';
-    e.currentTarget.style.opacity = '0.5';
-  }
-
-  onDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const card = e.currentTarget;
-    if (card !== this.draggedElement) {
-      card.style.borderTop = '2px solid #ffffff';
-    }
-  }
-
-  onDrop(e, targetDayId) {
-    e.preventDefault();
-    e.stopPropagation();
-    this.isDragging = false;
-    
-    if (!this.draggedElement || this.draggedElement.dataset.dayId === targetDayId) {
-      return;
-    }
-    
-    const prog = this.getCurrentProgram();
-    if (!prog || !prog.days) return;
-
-    const allDays = prog.days;
-    const draggedDayId = this.draggedElement.dataset.dayId;
-    const fromIndex = allDays.findIndex(d => d.id === draggedDayId);
-    const toIndex = allDays.findIndex(d => d.id === targetDayId);
-
-    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
-      const [movedDay] = allDays.splice(fromIndex, 1);
-      allDays.splice(toIndex, 0, movedDay);
-      this.savePrograms();
-      this.renderHome();
-    }
-  }
-
-  onDragEnd(e) {
-    this.isDragging = false;
-    if (this.draggedElement) {
-      this.draggedElement.style.opacity = '1';
-      this.draggedElement.style.borderTop = '';
-    }
-    document.querySelectorAll('.workout-card').forEach(card => {
-      card.style.borderTop = '';
-      card.style.opacity = '1';
-    });
-    this.draggedElement = null;
-  }
-
-  draggedExercise = null;
-
-  onExerciseDragStart(e) {
-    this.draggedExercise = e.currentTarget;
-    e.dataTransfer.effectAllowed = 'move';
-    e.currentTarget.style.opacity = '0.5';
-  }
-
-  onExerciseDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const card = e.currentTarget;
-    if (card !== this.draggedExercise) {
-      card.style.borderLeft = '3px solid #ffffff';
-    }
-  }
-
-  onExerciseDrop(e, targetExerciseId) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (!this.draggedExercise || !this.activeWorkout) {
-      return;
-    }
-
-    const draggedId = this.draggedExercise.dataset.exerciseId;
-    if (draggedId === targetExerciseId) {
-      return;
-    }
-
-    const exercises = this.getActiveExercises();
-    const fromIndex = exercises.findIndex(e => e.id === draggedId);
-    const toIndex = exercises.findIndex(e => e.id === targetExerciseId);
-
-    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
-      const [movedEx] = exercises.splice(fromIndex, 1);
-      exercises.splice(toIndex, 0, movedEx);
-      this.saveActiveWorkout();
-      this.renderWorkoutScreen();
-    }
-  }
-
-  onExerciseDragEnd(e) {
-    if (this.draggedExercise) {
-      this.draggedExercise.style.opacity = '1';
-      this.draggedExercise.style.borderLeft = '';
-    }
-    document.querySelectorAll('.ex-card').forEach(card => {
-      card.style.borderLeft = '';
-      card.style.opacity = '1';
-    });
-    this.draggedExercise = null;
-  }
-
-  draggedDayExercise = null;
-
-  onDayExerciseDragStart(e) {
-    this.draggedDayExercise = e.currentTarget;
-    e.dataTransfer.effectAllowed = 'move';
-    e.currentTarget.style.opacity = '0.5';
-  }
-
-  onDayExerciseDragOver(e) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const card = e.currentTarget;
-    if (card !== this.draggedDayExercise) {
-      card.style.borderTop = '2px solid #ffffff';
-    }
-  }
-
-  onDayExerciseDrop(e, targetIndex) {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (!this.draggedDayExercise || !this.dayDraft) {
-      return;
-    }
-
-    const draggedIndex = parseInt(this.draggedDayExercise.dataset.dayExIndex, 10);
-    if (draggedIndex === targetIndex) {
-      return;
-    }
-
-    const exercises = this.dayDraft.exercises;
-    if (draggedIndex < 0 || draggedIndex >= exercises.length || targetIndex < 0 || targetIndex >= exercises.length) {
-      return;
-    }
-
-    const [movedEx] = exercises.splice(draggedIndex, 1);
-    exercises.splice(targetIndex, 0, movedEx);
-    this.renderDayEdit();
-  }
-
-  onDayExerciseDragEnd(e) {
-    if (this.draggedDayExercise) {
-      this.draggedDayExercise.style.opacity = '1';
-      this.draggedDayExercise.style.borderTop = '';
-    }
-    document.querySelectorAll('.edit-card').forEach(card => {
-      card.style.borderTop = '';
-      card.style.opacity = '1';
-    });
-    this.draggedDayExercise = null;
   }
 
   escapeHtml(value) {
@@ -506,12 +360,12 @@ class GymApp {
           name: ex.name,
           w: String(weight),
           r: String(ex.targetReps || '10'),
-          c: String(ex.targetSets || 3)
+          c: String(ex.targetSets || 3),
+          n: ex.notes || ''
         };
       }) : []
     };
-    document.getElementById('dayEditTitle').textContent = day ? day.name : 'Новая тренировка';
-    document.getElementById('dayEditName').value = this.dayDraft.name;
+    this.updateDayEditTitle();
     this.renderDayEdit();
     this.navigate('viewDayEdit');
   }
@@ -520,20 +374,18 @@ class GymApp {
     const st = this.dayDraft;
     if (!st) return;
     const list = document.getElementById('dayEditList');
+    const rm = this.reorder.day;
+    list.classList.toggle('reorder-on', rm);
     if (st.exercises.length === 0) {
       list.innerHTML = '<div class="de-empty">Пока нет упражнений</div>';
     } else {
       list.innerHTML = st.exercises.map((it, i) => `
-        <div class="edit-card" draggable="true" data-day-ex-index="${i}"
-             ondragstart="app.onDayExerciseDragStart(event)" 
-             ondragover="app.onDayExerciseDragOver(event)" 
-             ondrop="app.onDayExerciseDrop(event, ${i})" 
-             ondragend="app.onDayExerciseDragEnd(event)" style="cursor: grab;">
+        <div class="edit-card" data-day-ex-index="${i}">
           <div class="workout-card-header">
             <div class="workout-card-title">${this.escapeHtml(it.name)}</div>
-            <button class="card-menu-btn" onclick="app.askRemoveDayExercise(${i})" title="Удалить упражнение" aria-label="Удалить упражнение">
+            ${rm ? '' : `<button class="card-menu-btn" onclick="app.askRemoveDayExercise(${i})" title="Удалить упражнение" aria-label="Удалить упражнение">
               <img class="icon" src="./icons/trash.svg" alt="">
-            </button>
+            </button>`}
           </div>
           <div class="metric-group">
             <label class="metric-pill">
@@ -549,11 +401,273 @@ class GymApp {
               <span class="metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>
             </label>
           </div>
+          <input class="note-input" type="text" maxlength="300" autocomplete="off" placeholder="Примечание" value="${this.escapeHtml(it.n || '')}" oninput="app.onDayNoteInput(this, ${i})" aria-label="Примечание к упражнению">
         </div>
       `).join('');
       list.querySelectorAll('.metric-input').forEach(inp => this.fitMetricInput(inp));
     }
     this.updateDayEditSave();
+  }
+
+  // --- РЕЖИМ ПЕРЕСТАНОВКИ: карточку нужно зажать на ~0,25 с и потянуть пальцем (на десктопе тянется мышью сразу) ---
+  initReorderDrag() {
+    const zones = [
+      { scope: 'list', id: 'workoutsList', item: '.workout-card' },
+      { scope: 'workout', id: 'workoutExercisesContainer', item: '.ex-card' },
+      { scope: 'day', id: 'dayEditList', item: '.edit-card' }
+    ];
+    zones.forEach(z => {
+      const box = document.getElementById(z.id);
+      if (!box) return;
+      box.addEventListener('pointerdown', (e) => this.onReorderPointerDown(e, z, box));
+      box.addEventListener('contextmenu', (e) => { if (this.reorder[z.scope]) e.preventDefault(); });
+      // В режиме перестановки карточки только перемещаются: любой клик внутри блокируется
+      box.addEventListener('click', (e) => {
+        if (!this.reorder[z.scope]) return;
+        e.stopPropagation();
+        e.preventDefault();
+      }, true);
+    });
+    // Пока карточка перетаскивается, страница не должна прокручиваться
+    document.addEventListener('touchmove', (e) => {
+      if (this.reorderDrag && this.reorderDrag.active && e.cancelable) e.preventDefault();
+    }, { passive: false });
+  }
+
+  onReorderPointerDown(e, zone, box) {
+    if (!this.reorder[zone.scope] || this.reorderDrag) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('input, textarea')) return;
+    const el = e.target.closest(zone.item);
+    if (!el || !box.contains(el)) return;
+    const d = {
+      zone, box, el,
+      pointerId: e.pointerId,
+      startX: e.clientX, startY: e.clientY, y: e.clientY,
+      active: false, timer: null, raf: null,
+      items: [], from: -1, to: -1
+    };
+    d.move = (ev) => this.onReorderPointerMove(ev);
+    d.up = (ev) => this.endReorderDrag(ev.type === 'pointercancel');
+    this.reorderDrag = d;
+    if (e.pointerType !== 'mouse') {
+      d.timer = setTimeout(() => this.startReorderDrag(), 250);
+    }
+    document.addEventListener('pointermove', d.move);
+    document.addEventListener('pointerup', d.up);
+    document.addEventListener('pointercancel', d.up);
+  }
+
+  onReorderPointerMove(ev) {
+    const d = this.reorderDrag;
+    if (!d || ev.pointerId !== d.pointerId) return;
+    d.y = ev.clientY;
+    if (!d.active) {
+      const dist = Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY);
+      if (ev.pointerType === 'mouse') {
+        if (dist > 4) this.startReorderDrag();
+        else return;
+      } else {
+        // Палец сдвинулся до долгого нажатия — это обычная прокрутка страницы
+        if (dist > 8) this.endReorderDrag(true);
+        return;
+      }
+    }
+    this.updateReorderDrag();
+  }
+
+  startReorderDrag() {
+    const d = this.reorderDrag;
+    if (!d || d.active) return;
+    clearTimeout(d.timer);
+    d.items = Array.from(d.box.querySelectorAll(d.zone.item));
+    d.from = d.items.indexOf(d.el);
+    if (d.from < 0) { this.endReorderDrag(true); return; }
+    d.active = true;
+    d.rects = d.items.map(it => {
+      const r = it.getBoundingClientRect();
+      return { top: r.top + window.scrollY, height: r.height };
+    });
+    d.grab = d.startY - (d.rects[d.from].top - window.scrollY);
+    const r0 = d.rects[0];
+    d.gap = d.rects.length > 1 ? Math.max(0, d.rects[1].top - (r0.top + r0.height)) : 0;
+    d.items.forEach(it => { if (it !== d.el) it.style.transition = 'transform 0.15s ease'; });
+    d.el.classList.add('dragging');
+    document.body.classList.add('reorder-dragging');
+    if (navigator.vibrate) navigator.vibrate(15);
+    this.updateReorderDrag();
+    const loop = () => {
+      const cur = this.reorderDrag;
+      if (!cur || !cur.active) return;
+      // Автопрокрутка у верхнего и нижнего края экрана
+      const edge = 80;
+      const vh = window.innerHeight;
+      if (cur.y < edge) window.scrollBy(0, -Math.ceil((edge - cur.y) / 5));
+      else if (cur.y > vh - edge) window.scrollBy(0, Math.ceil((cur.y - (vh - edge)) / 5));
+      this.updateReorderDrag();
+      cur.raf = requestAnimationFrame(loop);
+    };
+    d.raf = requestAnimationFrame(loop);
+  }
+
+  updateReorderDrag() {
+    const d = this.reorderDrag;
+    if (!d || !d.active) return;
+    const h = d.rects[d.from].height;
+    const desiredTop = d.y + window.scrollY - d.grab;
+    const center = desiredTop + h / 2;
+    let to = 0;
+    d.rects.forEach((r, j) => {
+      if (j !== d.from && r.top + r.height / 2 < center) to++;
+    });
+    d.to = to;
+    const shift = h + d.gap;
+    d.items.forEach((it, j) => {
+      if (j === d.from) {
+        it.style.transform = `translateY(${desiredTop - d.rects[d.from].top}px)`;
+        return;
+      }
+      let dy = 0;
+      if (d.from < to && j > d.from && j <= to) dy = -shift;
+      else if (d.from > to && j >= to && j < d.from) dy = shift;
+      it.style.transform = dy ? `translateY(${dy}px)` : '';
+    });
+  }
+
+  endReorderDrag(cancel) {
+    const d = this.reorderDrag;
+    if (!d) return;
+    clearTimeout(d.timer);
+    cancelAnimationFrame(d.raf);
+    document.removeEventListener('pointermove', d.move);
+    document.removeEventListener('pointerup', d.up);
+    document.removeEventListener('pointercancel', d.up);
+    this.reorderDrag = null;
+    document.body.classList.remove('reorder-dragging');
+    if (!d.active) return;
+    d.active = false;
+    // Отпускание над кнопкой внутри карточки не должно срабатывать как нажатие
+    const stopClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    document.addEventListener('click', stopClick, true);
+    setTimeout(() => document.removeEventListener('click', stopClick, true), 100);
+    d.items.forEach(it => {
+      it.style.transform = '';
+      it.style.transition = '';
+      it.classList.remove('dragging');
+    });
+    if (!cancel && d.to >= 0 && d.to !== d.from) this.applyReorder(d);
+  }
+
+  reorderButtonId(scope) {
+    return { list: 'btnReorderList', workout: 'btnReorderWorkout', day: 'btnReorderDay' }[scope];
+  }
+
+  toggleReorder(scope) {
+    this.closeCardMenu();
+    this.reorder[scope] = !this.reorder[scope];
+    this.applyReorderState(scope);
+    this.rerenderReorder(scope);
+  }
+
+  applyReorderState(scope) {
+    const btn = document.getElementById(this.reorderButtonId(scope));
+    if (!btn) return;
+    btn.classList.toggle('active', this.reorder[scope]);
+    btn.setAttribute('aria-pressed', String(this.reorder[scope]));
+  }
+
+  rerenderReorder(scope) {
+    if (scope === 'list') this.renderHome();
+    else if (scope === 'workout') this.renderWorkoutScreen();
+    else if (scope === 'day') this.renderDayEdit();
+  }
+
+  // При уходе с экрана режим перестановки выключается
+  resetReorder() {
+    this.endReorderDrag(true);
+    ['list', 'workout', 'day'].forEach(scope => {
+      if (this.reorder[scope]) {
+        this.reorder[scope] = false;
+        this.applyReorderState(scope);
+      }
+    });
+  }
+
+  // Переносит данные в новый порядок после отпускания карточки
+  applyReorder(d) {
+    const keys = d.items.map(it => {
+      if (d.zone.scope === 'list') return it.dataset.dayId;
+      if (d.zone.scope === 'workout') return it.dataset.exerciseId;
+      return parseInt(it.dataset.dayExIndex, 10);
+    });
+    const [moved] = keys.splice(d.from, 1);
+    keys.splice(d.to, 0, moved);
+
+    if (d.zone.scope === 'list') {
+      const prog = this.getCurrentProgram();
+      if (!prog) return;
+      // Текущая тренировка тоже стоит в списке, поэтому переставляются все дни
+      const byId = new Map(prog.days.map(day => [day.id, day]));
+      const ordered = keys.map(id => byId.get(id)).filter(Boolean);
+      if (ordered.length !== prog.days.length) return;
+      prog.days = ordered;
+      this.savePrograms();
+      this.renderHome();
+    } else if (d.zone.scope === 'workout') {
+      if (!this.activeWorkout) return;
+      const arr = this.getActiveExercises();
+      const byId = new Map(arr.map(ex => [ex.id, ex]));
+      const ordered = keys.map(id => byId.get(id)).filter(Boolean);
+      if (ordered.length !== arr.length) return;
+      arr.splice(0, arr.length, ...ordered);
+      this.saveActiveWorkout();
+      this.renderWorkoutScreen();
+    } else {
+      if (!this.dayDraft) return;
+      const old = this.dayDraft.exercises;
+      const ordered = keys.map(i => old[i]).filter(Boolean);
+      if (ordered.length !== old.length) return;
+      this.dayDraft.exercises = ordered;
+      this.renderDayEdit();
+    }
+  }
+
+  // --- ПРИМЕЧАНИЯ К УПРАЖНЕНИЯМ ---
+  onDayNoteInput(inp, index) {
+    const it = this.dayDraft && this.dayDraft.exercises[index];
+    if (it) it.n = inp.value;
+  }
+
+  openExerciseNote(exId) {
+    if (!this.activeWorkout) return;
+    const ex = this.getActiveExercises().find(e => e.id === exId);
+    if (!ex) return;
+    document.getElementById('noteExId').value = ex.id;
+    document.getElementById('noteExName').textContent = ex.name;
+    document.getElementById('noteText').value = ex.notes || '';
+    this.openModal('noteModal');
+  }
+
+  // Примечание сохраняется в тренировку и в шаблон дня, чтобы появиться и в следующий раз
+  saveExerciseNote() {
+    if (!this.activeWorkout) return;
+    const exId = document.getElementById('noteExId').value;
+    const text = document.getElementById('noteText').value.trim();
+    const ex = this.getActiveExercises().find(e => e.id === exId);
+    if (ex) {
+      ex.notes = text;
+      this.saveActiveWorkout();
+      const prog = this.getCurrentProgram();
+      const day = prog && prog.days.find(d => d.id === this.activeWorkout.dayId);
+      const tpl = day && day.exercises.find(e => e.id === exId);
+      if (tpl) {
+        tpl.notes = text;
+        this.savePrograms();
+      }
+    }
+    this.closeModal('noteModal');
+    this.renderWorkoutScreen();
+    this.showToast(text ? 'Примечание сохранено' : 'Примечание удалено');
   }
 
   // Кнопка внизу неактивна, пока нет названия или упражнений
@@ -565,10 +679,32 @@ class GymApp {
     btn.disabled = !(st.name.trim() && st.exercises.length > 0);
   }
 
-  onDayNameInput(inp) {
+  // Заголовок экрана — это и есть название: по нажатию оно меняется в шторке
+  updateDayEditTitle() {
+    const st = this.dayDraft;
+    const el = document.getElementById('dayEditTitle');
+    if (!st || !el) return;
+    const name = st.name.trim();
+    el.textContent = name || 'Новая тренировка';
+    el.classList.toggle('is-empty', !name);
+  }
+
+  openDayNameSheet() {
+    if (!this.dayDraft || this.reorder.day) return;
+    const inp = document.getElementById('dayNameInput');
+    inp.value = this.dayDraft.name;
+    this.openModal('dayNameModal');
+    setTimeout(() => inp.focus(), 50);
+  }
+
+  saveDayName() {
     if (!this.dayDraft) return;
-    this.dayDraft.name = inp.value;
+    const name = document.getElementById('dayNameInput').value.trim();
+    if (!name) return;
+    this.dayDraft.name = name;
+    this.updateDayEditTitle();
     this.updateDayEditSave();
+    this.closeModal('dayNameModal');
   }
 
   onDayEditInput(inp) {
@@ -614,7 +750,8 @@ class GymApp {
         name: item.name,
         w: String(last && last[0] ? last[0].weight : 0),
         r: String(last && last[0] ? last[0].reps : 10),
-        c: String(last && last.length ? last.length : 3)
+        c: String(last && last.length ? last.length : 3),
+        n: ''
       });
       added++;
     });
@@ -659,7 +796,7 @@ class GymApp {
         targetSets: parsed[i].count,
         targetReps: String(parsed[i].reps),
         targetWeight: parsed[i].weight,
-        notes: old ? (old.notes || '') : ''
+        notes: (it.n || '').trim()
       };
     });
 
@@ -721,6 +858,8 @@ class GymApp {
   }
 
   startWorkout(dayId) {
+    // В режиме перестановки карточки только перемещаются, тренировка не открывается
+    if (this.reorder.list) return;
     if (this.activeWorkout && this.activeWorkout.dayId !== dayId) {
       this.openConfirmSheet({
         title: 'Завершить текущую тренировку?',
@@ -796,7 +935,7 @@ class GymApp {
   }
 
   resumeActiveWorkout() {
-    if (!this.activeWorkout) return;
+    if (!this.activeWorkout || this.reorder.list) return;
     this.renderWorkoutScreen();
     this.navigate('viewWorkout');
   }
@@ -1248,29 +1387,33 @@ class GymApp {
       const target = ex.targetSets || 3;
 
       const goal = `Цель: ${target} × ${esc(ex.targetReps || '8-10')}${histMax > 0 ? ` · Рекорд: ${histMax} кг` : ''}`;
+      // Примечание показывается текстом; добавить или изменить его можно через меню «⋯»
       const subHtml = [
         `<div>${goal}</div>`,
         ex.notes ? `<div class="ex-note">${esc(ex.notes)}</div>` : '',
         `<div>Прошлый раз: ${esc(pastResultText)}</div>`
       ].join('');
 
+      const rm = this.reorder.workout;
+      const menuOrMove = rm
+        ? ''
+        : `<button class="card-menu-btn" onclick="app.toggleCardMenu(event, 'w_${ex.id}')" title="Меню" aria-label="Меню">
+                <img class="icon" src="./icons/dots-three.svg" alt="">
+              </button>`;
+
       html += `
-        <div class="ex-card${isDone ? ' done' : ''}" draggable="true" data-exercise-id="${ex.id}"
-             ondragstart="app.onExerciseDragStart(event)" 
-             ondragover="app.onExerciseDragOver(event)" 
-             ondrop="app.onExerciseDrop(event, '${ex.id}')" 
-             ondragend="app.onExerciseDragEnd(event)" style="cursor: grab;">
+        <div class="ex-card${isDone ? ' done' : ''}" data-exercise-id="${ex.id}">
           <div class="ex-head">
             <div class="workout-card-header">
               <div class="workout-card-title">${esc(ex.name)}</div>
-              <button class="card-menu-btn" onclick="app.toggleCardMenu(event, 'w_${ex.id}')" title="Меню" aria-label="Меню">
-                <img class="icon" src="./icons/dots-three.svg" alt="">
-              </button>
+              ${menuOrMove}
             </div>
             <div class="ex-sub">${subHtml}</div>
           </div>
           <div class="card-menu dd-menu" id="cardMenu-w_${ex.id}" onclick="event.stopPropagation()">
             <button class="card-menu-item" onclick="app.workoutMenuAction('replace', '${ex.id}')"><img class="icon icon-20" src="./icons/arrows-clockwise.svg" alt="">Замена</button>
+            <div class="dd-divider"></div>
+            <button class="card-menu-item" onclick="app.workoutMenuAction('note', '${ex.id}')"><img class="icon icon-20" src="./icons/chat-teardrop-dots.svg" alt="">Примечание</button>
             <div class="dd-divider"></div>
             <button class="card-menu-item" onclick="app.workoutMenuAction('edit', '${ex.id}')"><img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">Редактировать</button>
             <div class="dd-divider"></div>
@@ -1301,6 +1444,7 @@ class GymApp {
     });
 
     container.innerHTML = html;
+    container.classList.toggle('reorder-on', this.reorder.workout);
     container.querySelectorAll('.metric-input').forEach(inp => this.fitMetricInput(inp));
   }
 
@@ -1332,6 +1476,7 @@ class GymApp {
   workoutMenuAction(action, exId) {
     this.closeCardMenu();
     if (action === 'replace') this.openExercisePicker('replace', exId);
+    else if (action === 'note') this.openExerciseNote(exId);
     else if (action === 'edit') this.openWorkoutExerciseEdit(exId);
     else if (action === 'history') this.openExerciseHistory(exId);
     else if (action === 'remove') this.removeWorkoutExercise(exId);
@@ -1662,23 +1807,28 @@ class GymApp {
         log.entries.forEach(e => {
           if (e.sets && e.sets.length > 0) {
             totalSets += e.sets.length;
+            e.sets.forEach(s => { totalVolume += (s.weight * s.reps); });
             const exName = this.findExerciseName(e.exerciseId);
-            const setsSummary = e.sets.map(s => {
-              totalVolume += (s.weight * s.reps);
-              return this.formatSet(s);
-            }).join(', ');
+            const logEx = Array.isArray(log.exercises) ? log.exercises.find(x => x.id === e.exerciseId) : null;
+            const exNote = logEx && logEx.notes ? `<div class="history-exercise-note">${this.escapeHtml(logEx.notes)}</div>` : '';
 
             exercisesDetailsHtml += `
               <div class="history-exercise-detail">
-                <div class="history-exercise-name">${exName}</div>
-                <div class="history-sets-inline">${setsSummary}</div>
+                <div class="history-exercise-top">
+                  <div class="history-exercise-name">${this.escapeHtml(exName)}</div>
+                  <button type="button" class="history-chart-btn" onclick="event.stopPropagation(); app.openExerciseChart('${e.exerciseId}')" title="Посмотреть график" aria-label="Посмотреть график: ${this.escapeHtml(exName)}">
+                    <img class="icon icon-20" src="./icons/chart-bar-outline.svg" alt="">
+                  </button>
+                </div>
+                ${exNote}
+                <div class="history-sets">${this.groupSetsHtml(e.sets)}</div>
               </div>
             `;
           }
         });
       }
       if (log.note) {
-        exercisesDetailsHtml += `<div class="exercise-notes">${log.note}</div>`;
+        exercisesDetailsHtml += `<div class="exercise-notes">${this.escapeHtml(log.note)}</div>`;
       }
 
       html += `
@@ -1709,6 +1859,79 @@ class GymApp {
     });
 
     container.innerHTML = html;
+  }
+
+  // Подряд идущие одинаковые подходы схлопываются: «60 кг × 8 — 3 подхода»
+  groupSetsHtml(sets) {
+    const groups = [];
+    sets.forEach(s => {
+      const last = groups[groups.length - 1];
+      if (last && last.weight === s.weight && last.reps === s.reps) last.count++;
+      else groups.push({ weight: s.weight, reps: s.reps, count: 1 });
+    });
+    return groups.map(g => {
+      const label = g.weight > 0 ? `${g.weight} кг × ${g.reps}` : `${g.reps} повт.`;
+      return `<div class="history-set-row"><span class="history-set-val">${label}</span><span class="history-set-count">${g.count} ${this.pluralSets(g.count)}</span></div>`;
+    }).join('');
+  }
+
+  // Переход из истории на вкладку аналитики с выбранным упражнением
+  openExerciseChart(exId) {
+    this.chartExerciseId = exId;
+    this.openAnalytics();
+  }
+
+  // --- Кастомный выбор упражнения для графика (вместо системного select) ---
+  getChartExercises() {
+    // В аналитике только упражнения, которые реально выполнялись (есть в истории с подходами)
+    const done = new Set();
+    this.workoutLogs.forEach(log => (log.entries || []).forEach(en => {
+      if (en.sets && en.sets.length > 0) done.add(en.exerciseId);
+    }));
+    return this.getAllExercisesList().filter(e => done.has(e.id));
+  }
+
+  openChartPicker() {
+    const exercises = this.getChartExercises();
+    const list = document.getElementById('chartPickerList');
+    if (exercises.length === 0) {
+      list.innerHTML = '<div class="pk-empty">Нет доступных упражнений</div>';
+    } else {
+      list.innerHTML = exercises.map(e => {
+        const sel = e.id === this.chartExerciseId;
+        return `<button type="button" class="cp-row${sel ? ' selected' : ''}" role="option" aria-selected="${sel}" onclick="app.selectChartExercise('${e.id}')">` +
+          `<span class="cp-name">${this.escapeHtml(e.name)}</span>` +
+          `${sel ? '<img class="icon icon-20" src="./icons/check.svg" alt="">' : ''}</button>`;
+      }).join('');
+    }
+    this.openModal('chartPickerSheet');
+  }
+
+  selectChartExercise(exId) {
+    this.chartExerciseId = exId;
+    this.closeModal('chartPickerSheet');
+    this.updateChartPickerLabel();
+    this.renderExerciseChartAndPR();
+  }
+
+  updateChartPickerLabel() {
+    const label = document.getElementById('chartExerciseLabel');
+    if (!label) return;
+    const ex = this.getChartExercises().find(e => e.id === this.chartExerciseId);
+    label.textContent = ex ? ex.name : 'Нет доступных упражнений';
+  }
+
+  // Пояснения к показателям аналитики
+  showInfo(key) {
+    const info = {
+      maxWeight: ['Макс. вес', 'Самый большой вес, с которым вы сделали хотя бы один подход в этом упражнении, за всё время.'],
+      est1rm: ['Оценка 1RM', 'Расчётный максимум на одно повторение по формуле Эпли: вес × (1 + повторы ÷ 30). Берётся лучший подход за всё время. Это оценка, а не проверенный рекорд.'],
+      maxVolume: ['Макс. объём', 'Наибольший объём за одну тренировку: сумма «вес × повторы» по всем подходам упражнения.']
+    }[key];
+    if (!info) return;
+    document.getElementById('infoSheetTitle').textContent = info[0];
+    document.getElementById('infoSheetText').textContent = info[1];
+    this.openModal('infoSheet');
   }
 
   // «30.09.2026 • Вторник»
@@ -2119,24 +2342,13 @@ class GymApp {
     return newLogs.length;
   }
 
+  // Подставляет выбранное упражнение графика (если прежнего нет в списке — берёт первое)
   populateExerciseSelect() {
-    const select = document.getElementById('chartExerciseSelect');
-    if (!select) return;
-    const currentVal = select.value;
-    // В аналитике только упражнения, которые реально выполнялись (есть в истории с подходами)
-    const done = new Set();
-    this.workoutLogs.forEach(log => (log.entries || []).forEach(en => {
-      if (en.sets && en.sets.length > 0) done.add(en.exerciseId);
-    }));
-    const exercises = this.getAllExercisesList().filter(e => done.has(e.id));
-    if (exercises.length === 0) {
-      select.innerHTML = '<option value="">Нет доступных упражнений</option>';
-      return;
+    const exercises = this.getChartExercises();
+    if (!exercises.some(e => e.id === this.chartExerciseId)) {
+      this.chartExerciseId = exercises.length ? exercises[0].id : null;
     }
-    select.innerHTML = exercises.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
-    if (currentVal && exercises.some(e => e.id === currentVal)) {
-      select.value = currentVal;
-    }
+    this.updateChartPickerLabel();
   }
 
   setChartMetric(metric) {
@@ -2150,9 +2362,14 @@ class GymApp {
   }
 
   renderExerciseChartAndPR() {
-    const select = document.getElementById('chartExerciseSelect');
-    if (!select || !select.value) return;
-    const exId = select.value;
+    const exId = this.chartExerciseId;
+    if (!exId) {
+      document.getElementById('prMaxWeightVal').textContent = 0;
+      document.getElementById('prEst1RMVal').textContent = 0;
+      document.getElementById('prMaxVolumeVal').textContent = 0;
+      this.drawChart([]);
+      return;
+    }
 
     let maxWeight = 0;
     let maxEst1RM = 0;
@@ -2184,8 +2401,7 @@ class GymApp {
         if (this.selectedChartMetric === 'volume') metricVal = Math.round(sessionVolume);
 
         const d = new Date(log.date);
-        const dateLabel = `${d.getDate()}.${d.getMonth() + 1}`;
-        dataPoints.push({ date: dateLabel, value: metricVal });
+        dataPoints.push({ ts: d.getTime(), value: metricVal });
       }
     });
 
@@ -2193,12 +2409,22 @@ class GymApp {
     document.getElementById('prEst1RMVal').textContent = Math.round(maxEst1RM);
     document.getElementById('prMaxVolumeVal').textContent = Math.round(maxVolume);
 
+    // Подпись величины по вертикали зависит от выбранного показателя
+    const yLabels = {
+      weight: 'максимальный вес за тренировку, кг',
+      '1rm': 'расчётный максимум на 1 повторение, кг',
+      volume: 'объём за тренировку (вес × повторы), кг'
+    };
+    const legendY = document.getElementById('chartLegendY');
+    if (legendY) legendY.textContent = yLabels[this.selectedChartMetric] || yLabels.weight;
+
     this.drawChart(dataPoints);
   }
 
   drawChart(points) {
     const canvas = document.getElementById('progressChart');
     const emptyMsg = document.getElementById('chartEmptyMessage');
+    const legend = document.getElementById('chartLegend');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
@@ -2207,7 +2433,7 @@ class GymApp {
     const fontFamily = rootStyle.getPropertyValue('--font-family').trim() || 'sans-serif';
 
     const width = canvas.parentElement.clientWidth - 32;
-    const height = 220;
+    const height = 240;
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     ctx.scale(dpr, dpr);
@@ -2216,14 +2442,16 @@ class GymApp {
 
     if (points.length === 0) {
       canvas.style.display = 'none';
+      if (legend) legend.style.display = 'none';
       if (emptyMsg) emptyMsg.style.display = 'flex';
       return;
     }
 
     canvas.style.display = 'block';
+    if (legend) legend.style.display = 'flex';
     if (emptyMsg) emptyMsg.style.display = 'none';
 
-    const padding = { top: 25, right: 20, bottom: 35, left: 40 };
+    const padding = { top: 25, right: 16, bottom: 40, left: 44 };
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
 
@@ -2233,11 +2461,20 @@ class GymApp {
     if (minVal === maxVal) { minVal = Math.max(0, minVal - 10); maxVal = maxVal + 10; }
     const valRange = maxVal - minVal || 1;
 
+    // Подписи дат: «дд.мм», а если данные охватывают несколько лет — «дд.мм.гг»
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const years = new Set(points.map(p => new Date(p.ts).getFullYear()));
+    const fmtDate = (ts) => {
+      const d = new Date(ts);
+      const base = `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`;
+      return years.size > 1 ? `${base}.${String(d.getFullYear()).slice(2)}` : base;
+    };
+
     // Сетка: White/20, подписи осей: White/80
     ctx.strokeStyle = token('--white-20');
     ctx.lineWidth = 0.5;
     ctx.fillStyle = token('--white-80');
-    ctx.font = '14px ' + fontFamily;
+    ctx.font = '12px ' + fontFamily;
     ctx.textAlign = 'right';
 
     const gridSteps = 4;
@@ -2248,13 +2485,34 @@ class GymApp {
       ctx.moveTo(padding.left, y);
       ctx.lineTo(padding.left + chartW, y);
       ctx.stroke();
-      ctx.fillText(Math.round(yVal), padding.left - 8, y + 5);
+      ctx.fillText(Math.round(yVal), padding.left - 8, y + 4);
     }
 
     const coords = points.map((p, idx) => {
       const x = points.length === 1 ? padding.left + chartW / 2 : padding.left + (idx / (points.length - 1)) * chartW;
       const y = padding.top + chartH - ((p.value - minVal) / valRange) * chartH;
-      return { x, y, date: p.date, val: p.value };
+      return { x, y, ts: p.ts, val: p.value };
+    });
+
+    // Ось X: подписей столько, сколько помещается по ширине (минимум 5 значений, если точек хватает)
+    const labelW = years.size > 1 ? 58 : 46;
+    const maxLabels = Math.max(2, Math.floor(chartW / labelW));
+    const labelIdx = new Set();
+    if (coords.length <= maxLabels) {
+      coords.forEach((_, i) => labelIdx.add(i));
+    } else {
+      const step = (coords.length - 1) / (maxLabels - 1);
+      for (let k = 0; k < maxLabels; k++) labelIdx.add(Math.round(k * step));
+    }
+
+    // Вертикальные засечки сетки под подписанными датами
+    ctx.strokeStyle = token('--white-20');
+    ctx.lineWidth = 0.5;
+    labelIdx.forEach(i => {
+      ctx.beginPath();
+      ctx.moveTo(coords[i].x, padding.top);
+      ctx.lineTo(coords[i].x, padding.top + chartH);
+      ctx.stroke();
     });
 
     // Линия ряда: White/100
@@ -2268,25 +2526,56 @@ class GymApp {
     });
     ctx.stroke();
 
+    // Значения над точками: показываем столько, сколько помещается по ширине (~30 px на подпись),
+    // у плотного ряда подписи равномерно прореживаются, но максимум и последняя точка остаются всегда
+    const maxIdx = values.indexOf(Math.max(...values));
+    const valueW = 30;
+    const maxValueLabels = Math.max(2, Math.floor(chartW / valueW));
+    const valueIdx = new Set();
+    if (coords.length <= maxValueLabels) {
+      coords.forEach((_, i) => valueIdx.add(i));
+    } else {
+      const vStep = (coords.length - 1) / (maxValueLabels - 1);
+      for (let k = 0; k < maxValueLabels; k++) valueIdx.add(Math.round(k * vStep));
+      // Максимум и последняя точка важнее соседних подписей — убираем тех, кто с ними пересекается
+      [maxIdx, coords.length - 1].forEach(keep => {
+        valueIdx.forEach(i => {
+          if (i !== keep && Math.abs(coords[i].x - coords[keep].x) < valueW) valueIdx.delete(i);
+        });
+        valueIdx.add(keep);
+      });
+    }
+
     // Точки: заливка Neutral 800, обводка Neutral 200
     ctx.textAlign = 'center';
+    const dotR = coords.length > 30 ? 3 : coords.length > 15 ? 4 : 5;
     coords.forEach((c, idx) => {
       ctx.beginPath();
-      ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+      ctx.arc(c.x, c.y, dotR, 0, Math.PI * 2);
       ctx.fillStyle = token('--neutral-800');
       ctx.fill();
       ctx.strokeStyle = token('--neutral-200');
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      ctx.fillStyle = token('--white-100');
-      ctx.font = '14px ' + fontFamily;
-      ctx.fillText(c.val, c.x, c.y - 12);
+      if (valueIdx.has(idx)) {
+        ctx.fillStyle = token('--white-100');
+        ctx.font = '12px ' + fontFamily;
+        // Подпись у края не должна обрезаться
+        const vText = String(c.val);
+        const vHalf = ctx.measureText(vText).width / 2;
+        const vx = Math.min(Math.max(c.x, vHalf), width - vHalf);
+        ctx.fillText(vText, vx, c.y - dotR - 6);
+      }
 
-      // Даты по оси X: у плотного ряда подписываются только первая и последняя точки
-      if (coords.length <= 6 || idx === 0 || idx === coords.length - 1) {
+      if (labelIdx.has(idx)) {
         ctx.fillStyle = token('--white-80');
-        ctx.fillText(c.date, c.x, height - 10);
+        ctx.font = '12px ' + fontFamily;
+        // Крайние подписи не должны выходить за край холста
+        const text = fmtDate(c.ts);
+        const half = ctx.measureText(text).width / 2;
+        const tx = Math.min(Math.max(c.x, half), width - half);
+        ctx.fillText(text, tx, height - 12);
       }
     });
   }
