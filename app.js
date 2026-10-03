@@ -252,7 +252,7 @@ class GymApp {
              ondragover="app.onDragOver(event)" 
              ondrop="app.onDrop(event, '${day.id}')" 
              ondragend="app.onDragEnd(event)"
-             onclick="app.startWorkout('${day.id}')">
+             onclick="!app.isDragging && app.startWorkout('${day.id}')" style="cursor: grab;">
           <div class="workout-card-header">
             <div class="workout-card-title">${this.escapeHtml(day.name)}</div>
             <button class="card-menu-btn" onclick="app.toggleCardMenu(event, '${day.id}')" title="Меню" aria-label="Меню">
@@ -275,8 +275,10 @@ class GymApp {
   }
 
   draggedElement = null;
+  isDragging = false;
 
   onDragStart(e) {
+    this.isDragging = true;
     this.draggedElement = e.currentTarget;
     e.dataTransfer.effectAllowed = 'move';
     e.currentTarget.style.opacity = '0.5';
@@ -287,12 +289,15 @@ class GymApp {
     e.dataTransfer.dropEffect = 'move';
     const card = e.currentTarget;
     if (card !== this.draggedElement) {
-      card.style.borderTop = '2px solid #ff5722';
+      card.style.borderTop = '2px solid #ffffff';
     }
   }
 
   onDrop(e, targetDayId) {
     e.preventDefault();
+    e.stopPropagation();
+    this.isDragging = false;
+    
     if (!this.draggedElement || this.draggedElement.dataset.dayId === targetDayId) {
       return;
     }
@@ -314,6 +319,7 @@ class GymApp {
   }
 
   onDragEnd(e) {
+    this.isDragging = false;
     if (this.draggedElement) {
       this.draggedElement.style.opacity = '1';
       this.draggedElement.style.borderTop = '';
@@ -323,6 +329,112 @@ class GymApp {
       card.style.opacity = '1';
     });
     this.draggedElement = null;
+  }
+
+  draggedExercise = null;
+
+  onExerciseDragStart(e) {
+    this.draggedExercise = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.style.opacity = '0.5';
+  }
+
+  onExerciseDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const card = e.currentTarget;
+    if (card !== this.draggedExercise) {
+      card.style.borderLeft = '3px solid #ffffff';
+    }
+  }
+
+  onExerciseDrop(e, targetExerciseId) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!this.draggedExercise || !this.activeWorkout) {
+      return;
+    }
+
+    const draggedId = this.draggedExercise.dataset.exerciseId;
+    if (draggedId === targetExerciseId) {
+      return;
+    }
+
+    const exercises = this.getActiveExercises();
+    const fromIndex = exercises.findIndex(e => e.id === draggedId);
+    const toIndex = exercises.findIndex(e => e.id === targetExerciseId);
+
+    if (fromIndex !== -1 && toIndex !== -1 && fromIndex !== toIndex) {
+      const [movedEx] = exercises.splice(fromIndex, 1);
+      exercises.splice(toIndex, 0, movedEx);
+      this.saveActiveWorkout();
+      this.renderWorkoutScreen();
+    }
+  }
+
+  onExerciseDragEnd(e) {
+    if (this.draggedExercise) {
+      this.draggedExercise.style.opacity = '1';
+      this.draggedExercise.style.borderLeft = '';
+    }
+    document.querySelectorAll('.ex-card').forEach(card => {
+      card.style.borderLeft = '';
+      card.style.opacity = '1';
+    });
+    this.draggedExercise = null;
+  }
+
+  draggedDayExercise = null;
+
+  onDayExerciseDragStart(e) {
+    this.draggedDayExercise = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    e.currentTarget.style.opacity = '0.5';
+  }
+
+  onDayExerciseDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const card = e.currentTarget;
+    if (card !== this.draggedDayExercise) {
+      card.style.borderTop = '2px solid #ffffff';
+    }
+  }
+
+  onDayExerciseDrop(e, targetIndex) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!this.draggedDayExercise || !this.dayDraft) {
+      return;
+    }
+
+    const draggedIndex = parseInt(this.draggedDayExercise.dataset.dayExIndex, 10);
+    if (draggedIndex === targetIndex) {
+      return;
+    }
+
+    const exercises = this.dayDraft.exercises;
+    if (draggedIndex < 0 || draggedIndex >= exercises.length || targetIndex < 0 || targetIndex >= exercises.length) {
+      return;
+    }
+
+    const [movedEx] = exercises.splice(draggedIndex, 1);
+    exercises.splice(targetIndex, 0, movedEx);
+    this.renderDayEdit();
+  }
+
+  onDayExerciseDragEnd(e) {
+    if (this.draggedDayExercise) {
+      this.draggedDayExercise.style.opacity = '1';
+      this.draggedDayExercise.style.borderTop = '';
+    }
+    document.querySelectorAll('.edit-card').forEach(card => {
+      card.style.borderTop = '';
+      card.style.opacity = '1';
+    });
+    this.draggedDayExercise = null;
   }
 
   escapeHtml(value) {
@@ -412,7 +524,11 @@ class GymApp {
       list.innerHTML = '<div class="de-empty">Пока нет упражнений</div>';
     } else {
       list.innerHTML = st.exercises.map((it, i) => `
-        <div class="edit-card">
+        <div class="edit-card" draggable="true" data-day-ex-index="${i}"
+             ondragstart="app.onDayExerciseDragStart(event)" 
+             ondragover="app.onDayExerciseDragOver(event)" 
+             ondrop="app.onDayExerciseDrop(event, ${i})" 
+             ondragend="app.onDayExerciseDragEnd(event)" style="cursor: grab;">
           <div class="workout-card-header">
             <div class="workout-card-title">${this.escapeHtml(it.name)}</div>
             <button class="card-menu-btn" onclick="app.askRemoveDayExercise(${i})" title="Удалить упражнение" aria-label="Удалить упражнение">
@@ -1139,7 +1255,11 @@ class GymApp {
       ].join('');
 
       html += `
-        <div class="ex-card${isDone ? ' done' : ''}">
+        <div class="ex-card${isDone ? ' done' : ''}" draggable="true" data-exercise-id="${ex.id}"
+             ondragstart="app.onExerciseDragStart(event)" 
+             ondragover="app.onExerciseDragOver(event)" 
+             ondrop="app.onExerciseDrop(event, '${ex.id}')" 
+             ondragend="app.onExerciseDragEnd(event)" style="cursor: grab;">
           <div class="ex-head">
             <div class="workout-card-header">
               <div class="workout-card-title">${esc(ex.name)}</div>
@@ -1475,7 +1595,7 @@ class GymApp {
       title: 'Отменить тренировку?',
       text: 'Текущий прогресс будет потерян без возможности восстановления.',
       okLabel: 'Отменить',
-      cancelLabel: 'Отмена',
+      cancelLabel: 'Продолжить',
       onOk: () => {
         this.activeWorkout = null;
         this.saveActiveWorkout();
