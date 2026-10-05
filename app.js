@@ -388,18 +388,9 @@ class GymApp {
             </button>`}
           </div>
           <div class="metric-group">
-            <label class="metric-pill">
-              <input class="metric-input" data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onDayEditInput(this)" aria-label="Вес, кг">
-              <span>кг</span>
-            </label>
-            <label class="metric-pill">
-              <input class="metric-input" data-idx="${i}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.r)}" oninput="app.onDayEditInput(this)" aria-label="Повторы">
-              <span>раз</span>
-            </label>
-            <label class="metric-pill">
-              <input class="metric-input" data-idx="${i}" data-field="c" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.c)}" oninput="app.onDayEditInput(this)" aria-label="Подходы">
-              <span class="metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>
-            </label>
+            ${this.metricItemHtml(`data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onDayEditInput(this)" aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
+            ${this.metricItemHtml(`data-idx="${i}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.r)}" oninput="app.onDayEditInput(this)" aria-label="Повторы"`, '<span class="metric-unit">раз</span>')}
+            ${this.metricItemHtml(`data-idx="${i}" data-field="c" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.c)}" oninput="app.onDayEditInput(this)" aria-label="Подходы"`, `<span class="metric-unit metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>`)}
           </div>
           <input class="note-input" type="text" maxlength="300" autocomplete="off" placeholder="Примечание" value="${this.escapeHtml(it.n || '')}" oninput="app.onDayNoteInput(this, ${i})" aria-label="Примечание к упражнению">
         </div>
@@ -715,7 +706,7 @@ class GymApp {
     if (!it) return;
     it[inp.dataset.field] = inp.value;
     if (inp.dataset.field === 'c') {
-      const label = inp.parentElement.querySelector('.metric-sets-label');
+      const label = inp.closest('.metric-item').querySelector('.metric-sets-label');
       if (label) label.textContent = this.pluralSets(parseInt(inp.value, 10) || 0);
     }
   }
@@ -1368,21 +1359,26 @@ class GymApp {
         let defWeight = ex.targetWeight != null ? ex.targetWeight : 50;
         let defReps = parseInt(ex.targetReps, 10) || 10;
         let defCount = ex.targetSets || 3;
+        let customSets = null;
         if (entry.sets.length > 0) {
           const lastSet = entry.sets[entry.sets.length - 1];
           defWeight = lastSet.weight;
           defReps = lastSet.reps;
           defCount = entry.sets.length;
+          // Подходы с разными весами или повторами показываем по отдельности
+          if (this.areSetsMixed(entry.sets)) {
+            customSets = entry.sets.map(s => ({ weight: s.weight, reps: s.reps }));
+          }
         } else if (pastSets && pastSets.length > 0) {
           defWeight = pastSets[0].weight;
           defReps = pastSets[0].reps;
         }
-        this.exerciseInputState[ex.id] = { weight: defWeight, reps: defReps, count: defCount };
+        this.exerciseInputState[ex.id] = { weight: defWeight, reps: defReps, count: defCount, sets: customSets, editing: false };
       }
 
       const cur = this.exerciseInputState[ex.id];
       const histMax = this.getHistoricalMaxWeight(ex.id);
-      const isRecordPotential = histMax > 0 && cur.weight > histMax;
+      const isRecordPotential = histMax > 0 && this.getInputMaxWeight(cur) > histMax;
       const isDone = entry.sets.length > 0;
       const target = ex.targetSets || 3;
 
@@ -1423,21 +1419,12 @@ class GymApp {
           </div>
           <div class="ex-metrics">
             <button class="ex-check${isDone ? ' done' : ''}" onclick="app.toggleExerciseDone('${ex.id}')" title="${isDone ? 'Снять отметку' : 'Отметить выполненным'}" aria-label="${isDone ? 'Снять отметку' : 'Отметить выполненным'}" aria-pressed="${isDone}">${isDone ? '<img class="icon" src="./icons/check.svg" alt="">' : ''}</button>
-            <div class="metric-group">
-              <label class="metric-pill">
-                <input class="metric-input" id="inpWeight_${ex.id}" inputmode="decimal" autocomplete="off" value="${cur.weight}" oninput="app.onWorkoutInput(this, '${ex.id}')" aria-label="Вес, кг">
-                <span>кг</span>
-              </label>
-              <label class="metric-pill">
-                <input class="metric-input" id="inpReps_${ex.id}" inputmode="numeric" autocomplete="off" value="${cur.reps}" oninput="app.onWorkoutInput(this, '${ex.id}')" aria-label="Повторы">
-                <span>раз</span>
-              </label>
-              <label class="metric-pill">
-                <input class="metric-input" id="inpCount_${ex.id}" inputmode="numeric" autocomplete="off" value="${cur.count}" oninput="app.onWorkoutInput(this, '${ex.id}')" aria-label="Подходы">
-                <span id="cntLabel_${ex.id}">${this.pluralSets(cur.count)}</span>
-              </label>
-            </div>
+            ${this.renderMetricsHtml(ex.id, cur)}
+            <button class="ex-edit-btn${cur.editing ? ' active' : ''}" onclick="app.toggleSetsEditor('${ex.id}')" title="Подходы по отдельности" aria-label="Редактировать каждый подход" aria-pressed="${cur.editing}">
+              <img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">
+            </button>
           </div>
+          ${cur.editing ? this.renderSetsEditorHtml(ex.id, cur) : ''}
           <div id="livePR_${ex.id}" class="ex-live-pr">${isRecordPotential ? '<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд по весу!' : ''}</div>
         </div>
       `;
@@ -1520,30 +1507,184 @@ class GymApp {
     return Array.from({ length: Math.min(count, 50) }, () => ({ weight, reps, timestamp }));
   }
 
+  // Блок «вес / повторы / подходы»: цифра в рамке, подпись снаружи рамки
+  metricItemHtml(inputAttrs, unitHtml) {
+    return `<div class="metric-item"><label class="metric-pill"><input class="metric-input" ${inputAttrs}></label>${unitHtml}</div>`;
+  }
+
+  // Подходы разные, если у какого-то из них вес или повторы отличаются от первого
+  areSetsMixed(sets) {
+    if (!sets || sets.length < 2) return false;
+    const w = Number(sets[0].weight) || 0;
+    const r = Number(sets[0].reps) || 0;
+    return sets.some(s => (Number(s.weight) || 0) !== w || (Number(s.reps) || 0) !== r);
+  }
+
+  // Наибольший вес среди введённых подходов (для подсказки о рекорде)
+  getInputMaxWeight(cur) {
+    if (cur.sets && cur.sets.length > 0) {
+      return cur.sets.reduce((m, s) => Math.max(m, Number(s.weight) || 0), 0);
+    }
+    return cur.weight;
+  }
+
+  // Короткая запись разных подходов: «60 кг × 10 (×2) · 65 кг × 8»
+  summarizeSets(sets) {
+    const parts = [];
+    sets.forEach(s => {
+      const last = parts[parts.length - 1];
+      if (last && last.weight === s.weight && last.reps === s.reps) last.n += 1;
+      else parts.push({ weight: s.weight, reps: s.reps, n: 1 });
+    });
+    return parts.map(p => {
+      const base = p.weight > 0 ? `${p.weight} кг × ${p.reps}` : `${p.reps} раз`;
+      return p.n > 1 ? `${base} (×${p.n})` : base;
+    }).join(' · ');
+  }
+
+  renderMetricsHtml(exId, cur) {
+    if (cur.sets) {
+      return `<div class="metric-group"><div class="sets-summary" id="setsSummary_${exId}">${this.escapeHtml(this.summarizeSets(cur.sets))}</div></div>`;
+    }
+    const onInput = `oninput="app.onWorkoutInput(this, '${exId}')"`;
+    return `<div class="metric-group">
+              ${this.metricItemHtml(`id="inpWeight_${exId}" inputmode="decimal" autocomplete="off" value="${cur.weight}" ${onInput} aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
+              ${this.metricItemHtml(`id="inpReps_${exId}" inputmode="numeric" autocomplete="off" value="${cur.reps}" ${onInput} aria-label="Повторы"`, '<span class="metric-unit">раз</span>')}
+              ${this.metricItemHtml(`id="inpCount_${exId}" inputmode="numeric" autocomplete="off" value="${cur.count}" ${onInput} aria-label="Подходы"`, `<span class="metric-unit" id="cntLabel_${exId}">${this.pluralSets(cur.count)}</span>`)}
+            </div>`;
+  }
+
+  // Редактор «каждый подход отдельно»
+  renderSetsEditorHtml(exId, cur) {
+    const rows = cur.sets.map((s, i) => `
+            <div class="set-row">
+              <span class="set-num">${i + 1}</span>
+              ${this.metricItemHtml(`inputmode="decimal" autocomplete="off" value="${s.weight}" oninput="app.onSetInput(this, '${exId}', ${i}, 'weight')" aria-label="Подход ${i + 1}, вес, кг"`, '<span class="metric-unit">кг</span>')}
+              ${this.metricItemHtml(`inputmode="numeric" autocomplete="off" value="${s.reps}" oninput="app.onSetInput(this, '${exId}', ${i}, 'reps')" aria-label="Подход ${i + 1}, повторы"`, '<span class="metric-unit">раз</span>')}
+              <button class="set-remove" onclick="app.removeSetRow('${exId}', ${i})" title="Удалить подход" aria-label="Удалить подход ${i + 1}">
+                <img class="icon icon-20" src="./icons/x.svg" alt="">
+              </button>
+            </div>`).join('');
+    return `
+          <div class="sets-editor">${rows}
+            <button class="btn-pill set-add" onclick="app.addSetRow('${exId}')"><img class="icon icon-20" src="./icons/plus.svg" alt="">Добавить подход</button>
+          </div>`;
+  }
+
+  // Карандаш: открыть/закрыть редактор подходов
+  toggleSetsEditor(exId) {
+    const cur = this.exerciseInputState[exId];
+    if (!cur) return;
+    if (cur.editing) {
+      // Если после правок все подходы одинаковые, возвращаемся к обычным полям
+      if (cur.sets && cur.sets.length > 0) {
+        cur.count = cur.sets.length;
+        cur.weight = cur.sets[cur.sets.length - 1].weight;
+        cur.reps = cur.sets[cur.sets.length - 1].reps;
+        if (!this.areSetsMixed(cur.sets)) cur.sets = null;
+      }
+      cur.editing = false;
+    } else {
+      if (!cur.sets) {
+        const v = this.readExerciseInputs(exId);
+        if (!v) return;
+        if (v.count < 1 || v.count > 50) {
+          this.showToast('Укажите число подходов от 1 до 50');
+          return;
+        }
+        Object.assign(cur, v);
+        cur.sets = Array.from({ length: v.count }, () => ({ weight: v.weight, reps: v.reps }));
+      }
+      cur.editing = true;
+    }
+    this.renderWorkoutScreen();
+  }
+
+  onSetInput(inp, exId, index, field) {
+    this.fitMetricInput(inp);
+    const cur = this.exerciseInputState[exId];
+    if (!cur || !cur.sets || !cur.sets[index]) return;
+    cur.sets[index][field] = field === 'weight'
+      ? (parseFloat(String(inp.value).replace(',', '.')) || 0)
+      : (parseInt(inp.value, 10) || 0);
+    const summary = document.getElementById(`setsSummary_${exId}`);
+    if (summary) summary.textContent = this.summarizeSets(cur.sets);
+    this.updateLivePR(exId);
+    this.syncEntryFromInput(exId);
+  }
+
+  addSetRow(exId) {
+    const cur = this.exerciseInputState[exId];
+    if (!cur || !cur.sets) return;
+    if (cur.sets.length >= 50) {
+      this.showToast('Не больше 50 подходов');
+      return;
+    }
+    const last = cur.sets[cur.sets.length - 1] || { weight: cur.weight, reps: cur.reps };
+    cur.sets.push({ weight: last.weight, reps: last.reps });
+    cur.count = cur.sets.length;
+    this.syncEntryFromInput(exId);
+    this.renderWorkoutScreen();
+  }
+
+  removeSetRow(exId, index) {
+    const cur = this.exerciseInputState[exId];
+    if (!cur || !cur.sets || !cur.sets[index]) return;
+    if (cur.sets.length <= 1) {
+      this.showToast('Должен остаться хотя бы один подход');
+      return;
+    }
+    cur.sets.splice(index, 1);
+    cur.count = cur.sets.length;
+    this.syncEntryFromInput(exId);
+    this.renderWorkoutScreen();
+  }
+
+  // Подсказка «Будет новый рекорд» по введённым значениям
+  updateLivePR(exId) {
+    const cur = this.exerciseInputState[exId];
+    const prEl = document.getElementById(`livePR_${exId}`);
+    if (!cur || !prEl) return;
+    const histMax = this.getHistoricalMaxWeight(exId);
+    const maxW = this.getInputMaxWeight(cur);
+    if (histMax > 0 && maxW > histMax) {
+      prEl.innerHTML = `<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд! (${maxW} кг > ${histMax} кг)`;
+    } else {
+      prEl.innerHTML = '';
+    }
+  }
+
+  // Если упражнение уже отмечено выполненным, изменения сразу попадают в записанные подходы
+  syncEntryFromInput(exId) {
+    const cur = this.exerciseInputState[exId];
+    const entry = this.activeWorkout && this.activeWorkout.entries.find(e => e.exerciseId === exId);
+    if (!cur || !entry || entry.sets.length === 0) return;
+    const ts = entry.sets[0].timestamp || Date.now();
+    if (cur.sets) {
+      if (cur.sets.length >= 1 && cur.sets.every(s => s.reps >= 1)) {
+        entry.sets = cur.sets.map(s => ({ weight: s.weight, reps: s.reps, timestamp: ts }));
+        this.saveActiveWorkout();
+      }
+    } else if (cur.reps >= 1 && cur.count >= 1) {
+      entry.sets = this.buildSets(cur.weight, cur.reps, cur.count, ts);
+      this.saveActiveWorkout();
+    }
+  }
+
+
+
   onInputChange(exId) {
+    const cur = this.exerciseInputState[exId];
+    if (!cur || cur.sets) return;
     const v = this.readExerciseInputs(exId);
     if (!v) return;
-    this.exerciseInputState[exId] = v;
+    Object.assign(cur, v);
 
     const label = document.getElementById(`cntLabel_${exId}`);
     if (label) label.textContent = this.pluralSets(v.count);
 
-    const histMax = this.getHistoricalMaxWeight(exId);
-    const prEl = document.getElementById(`livePR_${exId}`);
-    if (prEl) {
-      if (histMax > 0 && v.weight > histMax) {
-        prEl.innerHTML = `<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд! (${v.weight} кг > ${histMax} кг)`;
-      } else {
-        prEl.innerHTML = '';
-      }
-    }
-
-    // Если упражнение уже отмечено выполненным, изменения сразу попадают в записанные подходы
-    const entry = this.activeWorkout && this.activeWorkout.entries.find(e => e.exerciseId === exId);
-    if (entry && entry.sets.length > 0 && v.reps >= 1 && v.count >= 1) {
-      entry.sets = this.buildSets(v.weight, v.reps, v.count, entry.sets[0].timestamp || Date.now());
-      this.saveActiveWorkout();
-    }
+    this.updateLivePR(exId);
+    this.syncEntryFromInput(exId);
   }
 
   // Отметка «упражнение выполнено»: записывает введённые подходы или снимает отметку
@@ -1562,25 +1703,44 @@ class GymApp {
       return;
     }
 
-    const v = this.readExerciseInputs(exId);
-    if (!v) return;
-    if (v.reps < 1) {
-      this.showToast('Укажите количество повторов');
-      return;
-    }
-    if (v.count < 1 || v.count > 50) {
-      this.showToast('Укажите число подходов от 1 до 50');
-      return;
+    const cur = this.exerciseInputState[exId];
+    let planned;
+    if (cur && cur.sets) {
+      // Подходы заданы по отдельности
+      if (cur.sets.length < 1 || cur.sets.length > 50) {
+        this.showToast('Укажите число подходов от 1 до 50');
+        return;
+      }
+      if (cur.sets.some(s => s.reps < 1)) {
+        this.showToast('Укажите повторы во всех подходах');
+        return;
+      }
+      planned = cur.sets.map(s => ({ weight: s.weight, reps: s.reps }));
+    } else {
+      const v = this.readExerciseInputs(exId);
+      if (!v) return;
+      if (v.reps < 1) {
+        this.showToast('Укажите количество повторов');
+        return;
+      }
+      if (v.count < 1 || v.count > 50) {
+        this.showToast('Укажите число подходов от 1 до 50');
+        return;
+      }
+      if (cur) Object.assign(cur, v);
+      else this.exerciseInputState[exId] = Object.assign({ sets: null, editing: false }, v);
+      planned = Array.from({ length: v.count }, () => ({ weight: v.weight, reps: v.reps }));
     }
 
-    const isPR = this.isNewRecord(exId, v.weight, v.reps);
-    this.exerciseInputState[exId] = v;
-    entry.sets = this.buildSets(v.weight, v.reps, v.count, Date.now());
+    const best = this.getBestSet(planned);
+    const isPR = this.isNewRecord(exId, best.weight, best.reps);
+    const now = Date.now();
+    entry.sets = planned.map(s => ({ weight: s.weight, reps: s.reps, timestamp: now }));
     this.saveActiveWorkout();
     this.renderWorkoutScreen();
 
     if (isPR) {
-      this.showToast(`Новый личный рекорд: ${v.weight} кг × ${v.reps} повт.!`);
+      this.showToast(`Новый личный рекорд: ${best.weight} кг × ${best.reps} повт.!`);
     } else {
       this.showToast('Упражнение выполнено');
     }
@@ -2078,18 +2238,9 @@ class GymApp {
           </button>
         </div>
         <div class="metric-group">
-          <label class="metric-pill">
-            <input class="metric-input" data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onLogEditInput(this)" aria-label="Вес, кг">
-            <span>кг</span>
-          </label>
-          <label class="metric-pill">
-            <input class="metric-input" data-idx="${i}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.r)}" oninput="app.onLogEditInput(this)" aria-label="Повторы">
-            <span>раз</span>
-          </label>
-          <label class="metric-pill">
-            <input class="metric-input" data-idx="${i}" data-field="c" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.c)}" oninput="app.onLogEditInput(this)" aria-label="Подходы">
-            <span class="metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>
-          </label>
+          ${this.metricItemHtml(`data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onLogEditInput(this)" aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
+          ${this.metricItemHtml(`data-idx="${i}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.r)}" oninput="app.onLogEditInput(this)" aria-label="Повторы"`, '<span class="metric-unit">раз</span>')}
+          ${this.metricItemHtml(`data-idx="${i}" data-field="c" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.c)}" oninput="app.onLogEditInput(this)" aria-label="Подходы"`, `<span class="metric-unit metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>`)}
         </div>
       </div>
     `).join('');
@@ -2104,7 +2255,7 @@ class GymApp {
   onLogEditInput(inp) {
     this.fitMetricInput(inp);
     if (inp.dataset.field === 'c') {
-      const label = inp.parentElement.querySelector('.metric-sets-label');
+      const label = inp.closest('.metric-item').querySelector('.metric-sets-label');
       if (label) label.textContent = this.pluralSets(parseInt(inp.value, 10) || 0);
     }
   }
@@ -2285,36 +2436,51 @@ class GymApp {
       });
     });
 
-    // Программа с днями A/B: ВСЕ упражнения из истории каждого шаблона (частые сверху)
-    const buildDayExercises = (tpl) => Object.keys(statsByTemplate[tpl])
-      .sort((a, b) => statsByTemplate[tpl][b].count - statsByTemplate[tpl][a].count)
-      .map(exId => {
-        const st = statsByTemplate[tpl][exId];
-        return {
-          id: exId,
-          name: this.exerciseNames[exId],
-          targetSets: st.lastSets.length || 3,
-          targetReps: String((st.lastSets[0] && st.lastSets[0].reps) || 10),
-          notes: ''
-        };
-      });
+    // Необязательный блок templates: { A: { name, exercises: [названия] }, ... } — состав дней задаётся явно
+    const tplDefs = (seed.templates && typeof seed.templates === 'object') ? seed.templates : null;
+    const hasTplDef = (tpl) => !!(tplDefs && tplDefs[tpl] && Array.isArray(tplDefs[tpl].exercises));
+    const dayKeys = () => (tplDefs ? Object.keys(tplDefs).filter(hasTplDef) : Object.keys(statsByTemplate)).sort();
+    const dayTitle = (tpl) => (hasTplDef(tpl) && tplDefs[tpl].name) ? tplDefs[tpl].name : templateName(tpl);
+    const makeDayExercise = (exId, st) => ({
+      id: exId,
+      name: this.exerciseNames[exId],
+      targetSets: (st && st.lastSets.length) || 3,
+      targetReps: String((st && st.lastSets[0] && st.lastSets[0].reps) || 10),
+      notes: ''
+    });
+
+    // Программа с днями A/B: по templates, а без него — ВСЕ упражнения из истории шаблона (частые сверху)
+    const buildDayExercises = (tpl) => {
+      const stats = statsByTemplate[tpl] || {};
+      if (hasTplDef(tpl)) {
+        const seen = new Set();
+        const list = [];
+        tplDefs[tpl].exercises.forEach(rawName => {
+          const exId = getExId(canonical(rawName));
+          if (seen.has(exId)) return;
+          seen.add(exId);
+          list.push(makeDayExercise(exId, stats[exId]));
+        });
+        return list;
+      }
+      return Object.keys(stats)
+        .sort((a, b) => stats[b].count - stats[a].count)
+        .map(exId => makeDayExercise(exId, stats[exId]));
+    };
+
+    const seedDays = () => dayKeys().map(tpl => ({
+      id: 'seed-day-' + tpl,
+      name: dayTitle(tpl),
+      exercises: buildDayExercises(tpl)
+    }));
 
     const seedProgram = this.programs.find(p => p.id === SEED_PROGRAM_ID);
     if (!seedProgram) {
-      const days = Object.keys(statsByTemplate).sort().map(tpl => ({
-        id: 'seed-day-' + tpl,
-        name: templateName(tpl),
-        exercises: buildDayExercises(tpl)
-      }));
-      this.programs.push({ id: SEED_PROGRAM_ID, name: 'Моя программа (A/B)', days });
+      this.programs.push({ id: SEED_PROGRAM_ID, name: 'Моя программа (A/B)', days: seedDays() });
       this.currentProgramId = SEED_PROGRAM_ID;
     } else {
       // Уже импортировано ранее: пересобираем дни A/B по актуальным данным файла
-      seedProgram.days = Object.keys(statsByTemplate).sort().map(tpl => ({
-        id: 'seed-day-' + tpl,
-        name: templateName(tpl),
-        exercises: buildDayExercises(tpl)
-      }));
+      seedProgram.days = seedDays();
       this.currentProgramId = SEED_PROGRAM_ID;
     }
     this.savePrograms();
