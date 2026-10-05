@@ -276,7 +276,7 @@ class GymApp {
               <img class="icon" src="./icons/dots-three.svg" alt="">
             </button>`}
           </div>
-          <div class="workout-card-meta">${this.pluralExercises(exCount)}</div>
+          <div class="workout-card-meta">${exCount} ${this.pluralExercises(exCount)}</div>
           <div class="card-menu" id="cardMenu-${day.id}" onclick="event.stopPropagation()">
             <button class="card-menu-item" onclick="app.openDayEdit('${day.id}')">
               <img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">Редактировать
@@ -298,15 +298,6 @@ class GymApp {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
-  }
-
-  pluralExercises(n) {
-    const m10 = n % 10;
-    const m100 = n % 100;
-    let word = 'упражнений';
-    if (m10 === 1 && m100 !== 11) word = 'упражнение';
-    else if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) word = 'упражнения';
-    return `${n} ${word}`;
   }
 
   // Меню «⋯» на карточке тренировки
