@@ -418,6 +418,40 @@
     </div>
   </div>
 
+  <!-- Шторка: цифровой ввод значения (вес, повторы, подходы) -->
+  <div id="numpadSheet" class="sheet-backdrop" onclick="app.closeNumpad()">
+    <div class="sheet numpad-sheet" onclick="event.stopPropagation()" role="dialog" aria-modal="true" aria-labelledby="numpadCaption">
+      <div class="sheet-handle"></div>
+      <div class="numpad-display">
+        <button type="button" class="numpad-step" onclick="app.numpadStep(-1)" aria-label="Меньше">&minus;</button>
+        <div class="numpad-center">
+          <div id="numpadCaption" class="numpad-caption"></div>
+          <div id="numpadPrev" class="numpad-neighbor"></div>
+          <div id="numpadValue" class="numpad-value">0</div>
+          <div id="numpadNext" class="numpad-neighbor"></div>
+        </div>
+        <button type="button" class="numpad-step" onclick="app.numpadStep(1)" aria-label="Больше">+</button>
+      </div>
+      <div class="numpad-keys">
+        <button type="button" class="numpad-key" onclick="app.numpadKey('1')">1</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('2')">2</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('3')">3</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('4')">4</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('5')">5</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('6')">6</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('7')">7</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('8')">8</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('9')">9</button>
+        <button type="button" id="numpadDot" class="numpad-key" onclick="app.numpadKey('.')" aria-label="Десятичная точка">.</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('0')">0</button>
+        <button type="button" class="numpad-key" onclick="app.numpadKey('back')" aria-label="Стереть">&#9003;</button>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-pill btn-pill-dark" onclick="app.closeNumpad()">Готово</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./app.js"></script>
 </body>
 </html>

@@ -1476,21 +1476,14 @@ class GymApp {
     this.openModal('exerciseModal');
   }
 
-  onWorkoutInput(inp, exId) {
-    this.fitMetricInput(inp);
-    this.onInputChange(exId);
-  }
-
-  // Читает введённые вес, повторы и число подходов карточки упражнения
+  // Читает вес, повторы и число подходов карточки упражнения из состояния (значения вводятся через цифровую шторку)
   readExerciseInputs(exId) {
-    const inpWeight = document.getElementById(`inpWeight_${exId}`);
-    const inpReps = document.getElementById(`inpReps_${exId}`);
-    const inpCount = document.getElementById(`inpCount_${exId}`);
-    if (!inpWeight || !inpReps || !inpCount) return null;
+    const cur = this.exerciseInputState[exId];
+    if (!cur) return null;
     return {
-      weight: parseFloat(String(inpWeight.value).replace(',', '.')) || 0,
-      reps: parseInt(inpReps.value, 10) || 0,
-      count: parseInt(inpCount.value, 10) || 0
+      weight: Number(cur.weight) || 0,
+      reps: parseInt(cur.reps, 10) || 0,
+      count: parseInt(cur.count, 10) || 0
     };
   }
 
@@ -1537,12 +1530,17 @@ class GymApp {
     if (cur.sets) {
       return `<div class="metric-group"><div class="sets-summary" id="setsSummary_${exId}">${this.escapeHtml(this.summarizeSets(cur.sets))}</div></div>`;
     }
-    const onInput = `oninput="app.onWorkoutInput(this, '${exId}')"`;
     return `<div class="metric-group">
-              ${this.metricItemHtml(`id="inpWeight_${exId}" inputmode="decimal" autocomplete="off" value="${cur.weight}" ${onInput} aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
-              ${this.metricItemHtml(`id="inpReps_${exId}" inputmode="numeric" autocomplete="off" value="${cur.reps}" ${onInput} aria-label="Повторы"`, '<span class="metric-unit">раз</span>')}
-              ${this.metricItemHtml(`id="inpCount_${exId}" inputmode="numeric" autocomplete="off" value="${cur.count}" ${onInput} aria-label="Подходы"`, `<span class="metric-unit" id="cntLabel_${exId}">${this.pluralSets(cur.count)}</span>`)}
+              ${this.metricButtonHtml(exId, 'weight', null, `${cur.weight} кг`, 'Вес, кг')}
+              ${this.metricButtonHtml(exId, 'reps', null, `${cur.reps} раз`, 'Повторы')}
+              ${this.metricButtonHtml(exId, 'count', null, `${cur.count} подх.`, 'Подходы')}
             </div>`;
+  }
+
+  // Рамка-кнопка «50 кг»: подпись внутри рамки, значение меняется через цифровую шторку
+  metricButtonHtml(exId, field, index, text, label) {
+    const idx = index == null ? 'null' : index;
+    return `<button type="button" class="metric-pill metric-btn" onclick="app.openNumpad('${exId}', '${field}', ${idx})" aria-label="${this.escapeHtml(label)}: ${this.escapeHtml(text)}">${this.escapeHtml(text)}</button>`;
   }
 
   // Редактор «каждый подход отдельно»
@@ -1550,8 +1548,8 @@ class GymApp {
     const rows = cur.sets.map((s, i) => `
             <div class="set-row">
               <span class="set-num">${i + 1}</span>
-              ${this.metricItemHtml(`inputmode="decimal" autocomplete="off" value="${s.weight}" oninput="app.onSetInput(this, '${exId}', ${i}, 'weight')" aria-label="Подход ${i + 1}, вес, кг"`, '<span class="metric-unit">кг</span>')}
-              ${this.metricItemHtml(`inputmode="numeric" autocomplete="off" value="${s.reps}" oninput="app.onSetInput(this, '${exId}', ${i}, 'reps')" aria-label="Подход ${i + 1}, повторы"`, '<span class="metric-unit">раз</span>')}
+              ${this.metricButtonHtml(exId, 'weight', i, `${s.weight} кг`, `Подход ${i + 1}, вес, кг`)}
+              ${this.metricButtonHtml(exId, 'reps', i, `${s.reps} раз`, `Подход ${i + 1}, повторы`)}
               <button class="set-remove" onclick="app.removeSetRow('${exId}', ${i})" title="Удалить подход" aria-label="Удалить подход ${i + 1}">
                 <img class="icon icon-20" src="./icons/x.svg" alt="">
               </button>
@@ -1591,17 +1589,94 @@ class GymApp {
     this.renderWorkoutScreen();
   }
 
-  onSetInput(inp, exId, index, field) {
-    this.fitMetricInput(inp);
+  // --- Цифровая шторка ввода: нажали на рамку «50 кг» — снизу открывается большое число, − / + и клавиатура ---
+  openNumpad(exId, field, index) {
     const cur = this.exerciseInputState[exId];
-    if (!cur || !cur.sets || !cur.sets[index]) return;
-    cur.sets[index][field] = field === 'weight'
-      ? (parseFloat(String(inp.value).replace(',', '.')) || 0)
-      : (parseInt(inp.value, 10) || 0);
-    const summary = document.getElementById(`setsSummary_${exId}`);
-    if (summary) summary.textContent = this.summarizeSets(cur.sets);
-    this.updateLivePR(exId);
-    this.syncEntryFromInput(exId);
+    if (!cur) return;
+    const sets = index != null ? cur.sets : null;
+    if (index != null && (!sets || !sets[index])) return;
+    const value = index != null ? sets[index][field] : cur[field];
+    this.numpad = { exId, field, index, text: String(Number(value) || 0) };
+    this.renderNumpad();
+    this.openModal('numpadSheet');
+  }
+
+  closeNumpad() {
+    this.numpad = null;
+    this.closeModal('numpadSheet');
+  }
+
+  getNumpadLimit(field) {
+    return field === 'count' ? 50 : 999;
+  }
+
+  getNumpadStep(field) {
+    return field === 'weight' ? 0.5 : 1;
+  }
+
+  formatNumpadNumber(n) {
+    return String(Number(n.toFixed(2)));
+  }
+
+  renderNumpad() {
+    const np = this.numpad;
+    if (!np) return;
+    const captions = { weight: 'Вес, кг', reps: 'Повторы', count: 'Подходы' };
+    const value = parseFloat(np.text) || 0;
+    const step = this.getNumpadStep(np.field);
+    const max = this.getNumpadLimit(np.field);
+    document.getElementById('numpadCaption').textContent = captions[np.field] || '';
+    document.getElementById('numpadValue').textContent = np.text === '' ? '0' : np.text;
+    document.getElementById('numpadPrev').textContent = value - step >= 0 ? this.formatNumpadNumber(value - step) : '';
+    document.getElementById('numpadNext').textContent = value + step <= max ? this.formatNumpadNumber(value + step) : '';
+    document.getElementById('numpadDot').disabled = np.field !== 'weight';
+  }
+
+  // Кнопки клавиатуры: цифры, точка и стирание
+  numpadKey(k) {
+    const np = this.numpad;
+    if (!np) return;
+    let t = np.text;
+    if (k === 'back') {
+      t = t.slice(0, -1);
+    } else if (k === '.') {
+      if (np.field !== 'weight' || t.includes('.')) return;
+      t = (t === '' ? '0' : t) + '.';
+    } else {
+      t = (t === '0' || t === '') ? k : t + k;
+    }
+    if (t.includes('.') && t.split('.')[1].length > 2) return;
+    const v = parseFloat(t) || 0;
+    if (v > this.getNumpadLimit(np.field)) return;
+    np.text = t;
+    this.applyNumpadValue(v);
+  }
+
+  // Кнопки − и +: шаг 0,5 кг для веса и 1 для повторов и подходов
+  numpadStep(dir) {
+    const np = this.numpad;
+    if (!np) return;
+    const step = this.getNumpadStep(np.field);
+    const v = Math.min(this.getNumpadLimit(np.field), Math.max(0, (parseFloat(np.text) || 0) + dir * step));
+    np.text = this.formatNumpadNumber(v);
+    this.applyNumpadValue(v);
+  }
+
+  // Записывает значение в карточку, обновляет рекорд и уже отмеченные подходы
+  applyNumpadValue(v) {
+    const np = this.numpad;
+    const cur = np && this.exerciseInputState[np.exId];
+    if (!cur) return;
+    if (np.index != null) {
+      if (!cur.sets || !cur.sets[np.index]) return;
+      cur.sets[np.index][np.field] = np.field === 'weight' ? v : Math.round(v);
+    } else {
+      cur[np.field] = np.field === 'weight' ? v : Math.round(v);
+    }
+    this.renderNumpad();
+    this.updateLivePR(np.exId);
+    this.syncEntryFromInput(np.exId);
+    this.renderWorkoutScreen();
   }
 
   addSetRow(exId) {
@@ -1663,20 +1738,6 @@ class GymApp {
   }
 
 
-
-  onInputChange(exId) {
-    const cur = this.exerciseInputState[exId];
-    if (!cur || cur.sets) return;
-    const v = this.readExerciseInputs(exId);
-    if (!v) return;
-    Object.assign(cur, v);
-
-    const label = document.getElementById(`cntLabel_${exId}`);
-    if (label) label.textContent = this.pluralSets(v.count);
-
-    this.updateLivePR(exId);
-    this.syncEntryFromInput(exId);
-  }
 
   // Отметка «упражнение выполнено»: записывает введённые подходы или снимает отметку
   toggleExerciseDone(exId) {
