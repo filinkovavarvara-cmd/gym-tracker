@@ -41,6 +41,7 @@ class GymApp {
     this.loadData();
     document.addEventListener('click', () => this.closeCardMenu());
     this.initReorderDrag();
+    this.initSheetSwipe();
     this.renderHome();
     this.renderHistory();
     this.initServiceWorker();
@@ -389,6 +390,104 @@ class GymApp {
       list.querySelectorAll('.metric-input').forEach(inp => this.fitMetricInput(inp));
     }
     this.updateDayEditSave();
+  }
+
+  // --- СВАЙП ШТОРОК: шторку с «ручкой» сверху можно закрыть, потянув её пальцем вниз ---
+  // Закрытие идёт через обычный клик по подложке, поэтому у каждой шторки сохраняется её прежнее поведение при закрытии
+  initSheetSwipe() {
+    let drag = null;
+
+    // Если внутри шторки прокручен список, жест вниз должен листать его, а не двигать шторку
+    const isScrolledInside = (target, sheet) => {
+      let el = target;
+      while (el) {
+        if (el.scrollHeight > el.clientHeight + 1 && el.scrollTop > 0) {
+          const oy = getComputedStyle(el).overflowY;
+          if (oy === 'auto' || oy === 'scroll') return true;
+        }
+        if (el === sheet) break;
+        el = el.parentElement;
+      }
+      return false;
+    };
+
+    const resetStyles = (d) => {
+      d.sheet.style.transform = '';
+      d.sheet.style.transition = '';
+      d.backdrop.style.background = '';
+      d.backdrop.style.transition = '';
+    };
+
+    document.addEventListener('touchstart', (e) => {
+      if (drag && drag.settling) return;
+      drag = null;
+      if (e.touches.length !== 1 || !e.target.closest) return;
+      const sheet = e.target.closest('.sheet');
+      if (!sheet || !Array.from(sheet.children).some(c => c.classList.contains('sheet-handle'))) return;
+      const backdrop = sheet.parentElement;
+      if (!backdrop || !backdrop.classList.contains('sheet-backdrop') || !backdrop.classList.contains('open')) return;
+      const t = e.touches[0];
+      drag = {
+        sheet, backdrop, x: t.clientX, y: t.clientY, t0: 0, dy: 0,
+        active: false, settling: false, scrolled: isScrolledInside(e.target, sheet)
+      };
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+      if (!drag || drag.settling) return;
+      const t = e.touches[0];
+      const dx = t.clientX - drag.x;
+      const dy = t.clientY - drag.y;
+
+      if (!drag.active) {
+        // Горизонтальный жест или движение вверх — не наш случай
+        if ((Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy)) || dy < -10) { drag = null; return; }
+        if (dy <= 3 || dy <= Math.abs(dx)) return;
+        if (drag.scrolled) { drag = null; return; }
+        drag.active = true;
+        drag.t0 = Date.now();
+        drag.y = t.clientY; // шторка начинает двигаться с нуля, без рывка
+        drag.sheet.style.transition = 'none';
+        drag.backdrop.style.transition = 'none';
+        if (e.cancelable) e.preventDefault();
+        return;
+      }
+
+      if (e.cancelable) e.preventDefault();
+      const offset = Math.max(0, t.clientY - drag.y);
+      drag.dy = offset;
+      drag.sheet.style.transform = `translateY(${offset}px)`;
+      const progress = Math.min(1, offset / Math.max(1, drag.sheet.offsetHeight));
+      drag.backdrop.style.background = `rgba(0, 0, 0, ${(0.55 * (1 - progress)).toFixed(3)})`;
+    }, { passive: false });
+
+    const finishDrag = (e) => {
+      const d = drag;
+      if (!d) return;
+      if (d.settling) return;
+      if (!d.active) { drag = null; return; }
+      d.settling = true;
+      const height = d.sheet.offsetHeight;
+      const velocity = d.dy / Math.max(1, Date.now() - d.t0);
+      const shouldClose = e.type !== 'touchcancel' && (d.dy > Math.min(120, height * 0.3) || (velocity > 0.5 && d.dy > 40));
+
+      d.sheet.style.transition = 'transform 0.2s ease-out';
+      d.backdrop.style.transition = 'background 0.2s ease-out';
+      if (shouldClose) {
+        d.sheet.style.transform = `translateY(${height}px)`;
+        d.backdrop.style.background = 'rgba(0, 0, 0, 0)';
+      } else {
+        d.sheet.style.transform = 'translateY(0)';
+        d.backdrop.style.background = 'rgba(0, 0, 0, 0.55)';
+      }
+      setTimeout(() => {
+        drag = null;
+        resetStyles(d);
+        if (shouldClose) d.backdrop.click();
+      }, 210);
+    };
+    document.addEventListener('touchend', finishDrag);
+    document.addEventListener('touchcancel', finishDrag);
   }
 
   // --- РЕЖИМ ПЕРЕСТАНОВКИ: карточку нужно зажать на ~0,25 с и потянуть пальцем (на десктопе тянется мышью сразу) ---
@@ -849,8 +948,9 @@ class GymApp {
         okLabel: 'Завершить',
         cancelLabel: 'Отмена',
         onOk: () => {
-          const records = this.getWorkoutRecords(this.activeWorkout);
           const workout = this.activeWorkout;
+          this.fillUncheckedEntries(workout);
+          const records = this.getWorkoutRecords(workout);
           workout.endedAt = new Date().toISOString();
           this.workoutLogs.push(workout);
           this.saveWorkoutLogs();
@@ -968,15 +1068,23 @@ class GymApp {
     return found ? found.id : null;
   }
 
-  // Список, с которым сверяется пикер: черновик тренировки (mode 'day') или активная тренировка
+  // Список, с которым сверяется пикер: черновик тренировки (mode 'day'), запись из истории (mode 'log') или активная тренировка
   getPickerExercises(mode) {
     if (mode === 'day') return this.dayDraft ? this.dayDraft.exercises : [];
+    if (mode === 'log') return this.logEdit ? this.logEdit.items.map(it => ({ id: it.exerciseId, name: it.name })) : [];
     return this.getActiveExercises();
   }
 
-  // mode: 'add' — добавить в активную тренировку, 'replace' — заменить упражнение exId, 'day' — добавить в создаваемую тренировку
+  // Нет данных, к которым относится пикер (черновик, запись из истории или активная тренировка)
+  isPickerContextMissing(mode) {
+    if (mode === 'day') return !this.dayDraft;
+    if (mode === 'log') return !this.logEdit;
+    return !this.activeWorkout;
+  }
+
+  // mode: 'add' — добавить в активную тренировку, 'replace' — заменить упражнение exId, 'day' — добавить в создаваемую тренировку, 'log' — добавить в редактируемую запись из истории
   openExercisePicker(mode, exId) {
-    if (mode === 'day' ? !this.dayDraft : !this.activeWorkout) return;
+    if (this.isPickerContextMissing(mode)) return;
     const exercises = this.getPickerExercises(mode);
     if (mode === 'replace' && !exercises.some(e => e.id === exId)) return;
 
@@ -1106,10 +1214,11 @@ class GymApp {
 
   confirmExercisePicker() {
     const p = this.picker;
-    if (!p || (p.mode === 'day' ? !this.dayDraft : !this.activeWorkout) || p.selected.length === 0) return;
+    if (!p || this.isPickerContextMissing(p.mode) || p.selected.length === 0) return;
     const items = p.selected.map(i => p.list[i]).filter(Boolean);
     if (p.mode === 'replace') this.replaceWorkoutExercise(p.exId, items[0]);
     else if (p.mode === 'day') this.addDayExercises(items);
+    else if (p.mode === 'log') this.addLogExercises(items);
     else this.addWorkoutExercises(items);
   }
 
@@ -1311,6 +1420,32 @@ class GymApp {
     return false;
   }
 
+  // Состояние полей карточки упражнения (вес, повторы, подходы); создаётся из цели, прошлой тренировки или записанных подходов
+  ensureExerciseInputState(ex, entry) {
+    if (!this.exerciseInputState[ex.id]) {
+      const pastSets = this.getLastWorkoutSets(ex.id);
+      let defWeight = ex.targetWeight != null ? ex.targetWeight : 50;
+      let defReps = parseInt(ex.targetReps, 10) || 10;
+      let defCount = ex.targetSets || 3;
+      let customSets = null;
+      if (entry && entry.sets.length > 0) {
+        const lastSet = entry.sets[entry.sets.length - 1];
+        defWeight = lastSet.weight;
+        defReps = lastSet.reps;
+        defCount = entry.sets.length;
+        // Подходы с разными весами или повторами показываем по отдельности
+        if (this.areSetsMixed(entry.sets)) {
+          customSets = entry.sets.map(s => ({ weight: s.weight, reps: s.reps }));
+        }
+      } else if (pastSets && pastSets.length > 0) {
+        defWeight = pastSets[0].weight;
+        defReps = pastSets[0].reps;
+      }
+      this.exerciseInputState[ex.id] = { weight: defWeight, reps: defReps, count: defCount, sets: customSets, editing: false };
+    }
+    return this.exerciseInputState[ex.id];
+  }
+
   renderWorkoutScreen() {
     if (!this.activeWorkout) return;
     const prog = this.getCurrentProgram();
@@ -1339,35 +1474,14 @@ class GymApp {
         this.activeWorkout.entries.push(entry);
       }
 
+      // Подходы вводятся вручную: вес, повторы и число подходов; отметка «выполнено» записывает их
+      const cur = this.ensureExerciseInputState(ex, entry);
       const pastSets = this.getLastWorkoutSets(ex.id);
       let pastResultText = 'Первая тренировка этого упражнения';
       if (pastSets && pastSets.length > 0) {
         pastResultText = pastSets.map(s => this.formatSet(s)).join(', ');
       }
 
-      // Подходы вводятся вручную: вес, повторы и число подходов; отметка «выполнено» записывает их
-      if (!this.exerciseInputState[ex.id]) {
-        let defWeight = ex.targetWeight != null ? ex.targetWeight : 50;
-        let defReps = parseInt(ex.targetReps, 10) || 10;
-        let defCount = ex.targetSets || 3;
-        let customSets = null;
-        if (entry.sets.length > 0) {
-          const lastSet = entry.sets[entry.sets.length - 1];
-          defWeight = lastSet.weight;
-          defReps = lastSet.reps;
-          defCount = entry.sets.length;
-          // Подходы с разными весами или повторами показываем по отдельности
-          if (this.areSetsMixed(entry.sets)) {
-            customSets = entry.sets.map(s => ({ weight: s.weight, reps: s.reps }));
-          }
-        } else if (pastSets && pastSets.length > 0) {
-          defWeight = pastSets[0].weight;
-          defReps = pastSets[0].reps;
-        }
-        this.exerciseInputState[ex.id] = { weight: defWeight, reps: defReps, count: defCount, sets: customSets, editing: false };
-      }
-
-      const cur = this.exerciseInputState[ex.id];
       const histMax = this.getHistoricalMaxWeight(ex.id);
       const isRecordPotential = histMax > 0 && this.getInputMaxWeight(cur) > histMax;
       const isDone = entry.sets.length > 0;
@@ -1823,6 +1937,35 @@ class GymApp {
   }
 
   // Сводка по тренировке: выполненные упражнения, подходы и тоннаж (вес × повторы)
+  // Упражнения без отметки перед сохранением получают подходы из введённых значений карточки,
+  // чтобы ни одно упражнение тренировки не потерялось. Отмеченные упражнения не меняются.
+  fillUncheckedEntries(w) {
+    const exercises = Array.isArray(w.exercises) ? w.exercises : [];
+    if (!Array.isArray(w.entries)) w.entries = [];
+    const now = Date.now();
+    exercises.forEach(ex => {
+      let entry = w.entries.find(e => e.exerciseId === ex.id);
+      if (!entry) {
+        entry = { exerciseId: ex.id, sets: [] };
+        w.entries.push(entry);
+      }
+      if (entry.sets && entry.sets.length > 0) return;
+      const cur = this.ensureExerciseInputState(ex, entry);
+      const toSet = (weight, reps) => ({
+        weight: Math.max(0, Number(weight) || 0),
+        reps: Math.max(1, parseInt(reps, 10) || 1),
+        timestamp: now
+      });
+      if (cur.sets && cur.sets.length > 0) {
+        entry.sets = cur.sets.slice(0, 50).map(s => toSet(s.weight, s.reps));
+      } else {
+        const count = Math.min(50, Math.max(1, parseInt(cur.count, 10) || 1));
+        entry.sets = Array.from({ length: count }, () => toSet(cur.weight, cur.reps));
+      }
+    });
+    return w;
+  }
+
   getWorkoutStats(w) {
     let exercises = 0;
     let sets = 0;
@@ -1853,12 +1996,13 @@ class GymApp {
 
   finishWorkout() {
     if (!this.activeWorkout) return;
-    const st = this.getWorkoutStats(this.activeWorkout);
+    // В сводке считаем и упражнения без отметки: они тоже будут сохранены
+    const st = this.getWorkoutStats(this.fillUncheckedEntries(JSON.parse(JSON.stringify(this.activeWorkout))));
     this.openConfirmSheet({
       title: 'Завершить тренировку?',
       text: st.sets === 0
         ? 'Вы не записали ни одного подхода. Всё равно завершить тренировку?'
-        : 'Выполненные подходы и результаты будут сохранены',
+        : 'Все упражнения и их подходы будут сохранены',
       stats: [
         `${st.exercises} ${this.pluralExercises(st.exercises)}`,
         `${st.sets} ${this.pluralSets(st.sets)}`,
@@ -1873,6 +2017,7 @@ class GymApp {
   commitFinishWorkout() {
     if (!this.activeWorkout) return;
     const workout = this.activeWorkout;
+    this.fillUncheckedEntries(workout);
     const records = this.getWorkoutRecords(workout);
 
     // Время окончания сохраняем вместе с тренировкой (date = время начала, проставлено при старте)
@@ -2255,6 +2400,7 @@ class GymApp {
       const count = entry.sets.length;
       items.push({
         entryIndex,
+        exerciseId: entry.exerciseId,
         name: this.findExerciseName(entry.exerciseId),
         w: String(weight),
         r: String(reps),
@@ -2338,6 +2484,32 @@ class GymApp {
     });
   }
 
+  // Упражнения из пикера добавляются в редактируемую запись; значения берём из последней тренировки с ними
+  addLogExercises(items) {
+    const st = this.logEdit;
+    if (!st) return;
+    this.syncLogEditFromDom();
+    let added = 0;
+    items.forEach((item, n) => {
+      const { id, name } = this.resolvePickerItem(item, n);
+      if (st.items.some(it => it.exerciseId === id)) return;
+      const last = this.getLastWorkoutSets(id);
+      st.items.push({
+        entryIndex: null,
+        exerciseId: id,
+        name,
+        w: String(last && last[0] ? last[0].weight : 0),
+        r: String(last && last[0] ? last[0].reps : 10),
+        c: String(last && last.length ? last.length : 3),
+        orig: null
+      });
+      added++;
+    });
+    this.closeExercisePicker();
+    this.renderLogEdit();
+    if (added > 0) this.showToast(added > 1 ? `Добавлено упражнений: ${added}` : 'Упражнение добавлено');
+  }
+
   saveLogEdit() {
     const st = this.logEdit;
     if (!st) return;
@@ -2347,6 +2519,7 @@ class GymApp {
 
     // Сначала проверяем все значения, чтобы не сохранить наполовину
     const parsed = new Map();
+    const added = [];
     for (const it of st.items) {
       const weight = parseFloat(String(it.w).replace(',', '.'));
       const reps = parseInt(it.r, 10);
@@ -2355,11 +2528,12 @@ class GymApp {
         this.showToast(`Проверьте значения: ${it.name}`);
         return;
       }
-      parsed.set(it.entryIndex, { weight, reps, count, orig: it.orig });
+      if (it.entryIndex == null) added.push({ exerciseId: it.exerciseId, name: it.name, weight, reps, count });
+      else parsed.set(it.entryIndex, { weight, reps, count, orig: it.orig });
     }
 
     const now = Date.now();
-    log.entries = (log.entries || []).map((entry, idx) => {
+    const entries = (log.entries || []).map((entry, idx) => {
       if (!entry.sets || entry.sets.length === 0) return entry;
       const p = parsed.get(idx);
       if (!p) return null; // упражнение удалено
@@ -2370,6 +2544,18 @@ class GymApp {
         sets: Array.from({ length: p.count }, () => ({ weight: p.weight, reps: p.reps, timestamp: ts }))
       });
     }).filter(Boolean);
+
+    // Новые упражнения: если в записи уже есть пустая отметка этого упражнения, заполняем её, иначе добавляем новую
+    added.forEach(a => {
+      const sets = Array.from({ length: a.count }, () => ({ weight: a.weight, reps: a.reps, timestamp: now }));
+      const existing = entries.find(e => e.exerciseId === a.exerciseId);
+      if (existing) existing.sets = sets;
+      else entries.push({ exerciseId: a.exerciseId, sets });
+      if (Array.isArray(log.exercises) && !log.exercises.some(x => x.id === a.exerciseId)) {
+        log.exercises.push({ id: a.exerciseId, name: a.name, targetSets: a.count, targetReps: String(a.reps), notes: '' });
+      }
+    });
+    log.entries = entries;
 
     this.saveWorkoutLogs();
     this.logEdit = null;

@@ -163,7 +163,7 @@ body {
 }
 
 /* Bottom sheet (Figma: BottomSheet/ConfirmDelete) */
-.sheet-backdrop { position: fixed; inset: 0; z-index: 250; display: none; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.55); }
+.sheet-backdrop { position: fixed; inset: 0; z-index: 250; display: none; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.55); overscroll-behavior: contain; }
 .sheet-backdrop.open { display: flex; }
 .sheet {
   width: 100%; max-width: 600px; background: var(--color-surface); border-radius: var(--r-24) var(--r-24) 0 0;
@@ -171,7 +171,7 @@ body {
   animation: sheetUp 0.2s ease-out;
 }
 @keyframes sheetUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-.sheet-handle { width: 144px; height: 5px; border-radius: var(--r-100); background: var(--neutral-200); align-self: center; }
+.sheet-handle { width: 144px; height: 5px; border-radius: var(--r-100); background: var(--neutral-200); align-self: center; touch-action: none; }
 .sheet-content { display: flex; flex-direction: column; gap: var(--gap); text-align: center; }
 .sheet-title { font-size: 18px; line-height: 24px; font-weight: 590; color: var(--white-100); }
 .sheet-text { font-size: 16px; line-height: 24px; font-weight: 400; color: var(--white-80); }
