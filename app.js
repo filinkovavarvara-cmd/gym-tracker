@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
   WORKOUT_LOGS: 'gym_workout_logs_v1',
   ACTIVE_WORKOUT: 'gym_active_workout_v1',
   EXERCISE_NAMES: 'gym_exercise_names_v1',
+  HIDDEN_EXERCISES: 'gym_hidden_exercises_v1',
   LAST_EXPORT: 'gym_last_export_v1'
 };
 
@@ -23,6 +24,8 @@ class GymApp {
     this.exerciseInputState = {};
     this.picker = null;
     this.exerciseNames = {};
+    // Названия (в нижнем регистре) упражнений, удалённых из списка выбора; история и программы их по-прежнему видят
+    this.hiddenExercises = [];
     this.selectedChartMetric = 'weight';
     this.historyTab = 'logs';
     this.logEdit = null;
@@ -72,6 +75,10 @@ class GymApp {
 
       const storedNames = localStorage.getItem(STORAGE_KEYS.EXERCISE_NAMES);
       this.exerciseNames = storedNames ? JSON.parse(storedNames) : {};
+
+      const storedHidden = localStorage.getItem(STORAGE_KEYS.HIDDEN_EXERCISES);
+      const hidden = storedHidden ? JSON.parse(storedHidden) : [];
+      this.hiddenExercises = Array.isArray(hidden) ? hidden : [];
     } catch (e) {
       console.error('Data load error:', e);
       this.programs = [DEFAULT_PROGRAM];
@@ -141,6 +148,10 @@ class GymApp {
 
   saveExerciseNames() {
     localStorage.setItem(STORAGE_KEYS.EXERCISE_NAMES, JSON.stringify(this.exerciseNames));
+  }
+
+  saveHiddenExercises() {
+    localStorage.setItem(STORAGE_KEYS.HIDDEN_EXERCISES, JSON.stringify(this.hiddenExercises));
   }
 
   saveActiveWorkout() {
@@ -1090,18 +1101,24 @@ class GymApp {
 
     const inWorkoutIds = new Set(exercises.map(e => e.id));
     const inWorkoutNames = new Set(exercises.map(e => this.normName(e.name)));
+    const hidden = new Set(this.hiddenExercises);
     const seen = new Set();
     const list = [];
     this.getAllExercisesList().forEach(e => {
       const key = this.normName(e.name);
       if (!key || seen.has(key)) return;
       seen.add(key);
-      if (inWorkoutIds.has(e.id) || inWorkoutNames.has(key)) return;
+      if (inWorkoutIds.has(e.id) || inWorkoutNames.has(key) || hidden.has(key)) return;
       list.push({ id: e.id, name: e.name });
     });
     list.sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 
-    this.picker = { mode, exId: exId || null, query: '', list, selected: [] };
+    // Выбор упражнения — единственная открытая шторка: остальные прячем и вернём после закрытия
+    const prev = Array.from(document.querySelectorAll('.sheet-backdrop.open'))
+      .filter(el => el.id !== 'exercisePicker' && el.id !== 'confirmSheet');
+    prev.forEach(el => el.classList.remove('open'));
+
+    this.picker = { mode, exId: exId || null, query: '', list, selected: [], returnTo: prev.map(el => el.id) };
     document.getElementById('pickerSearch').value = '';
     document.getElementById('pickerClear').hidden = true;
     this.renderExercisePicker();
@@ -1109,8 +1126,26 @@ class GymApp {
   }
 
   closeExercisePicker() {
+    const returnTo = this.picker && this.picker.returnTo ? this.picker.returnTo : [];
     this.picker = null;
     document.getElementById('exercisePicker').classList.remove('open');
+    // Возвращаемся к шторке, из которой открывали выбор (её поля остались как были)
+    returnTo.forEach(id => this.openModal(id));
+  }
+
+  // Временно убирает выбор с экрана (поверх открывается подтверждение), состояние выбора сохраняется
+  hidePicker() {
+    if (!this.picker) return;
+    const list = document.getElementById('pickerList');
+    this.picker.scrollTop = list ? list.scrollTop : 0;
+    document.getElementById('exercisePicker').classList.remove('open');
+  }
+
+  showPicker() {
+    if (!this.picker) return;
+    document.getElementById('exercisePicker').classList.add('open');
+    const list = document.getElementById('pickerList');
+    if (list) list.scrollTop = this.picker.scrollTop || 0;
   }
 
   renderExercisePicker() {
@@ -1121,17 +1156,28 @@ class GymApp {
       .map((it, i) => ({ it, i }))
       .filter(r => !q || this.normName(r.it.name).includes(q));
 
+    // Название не найдено ни в списке, ни в самой тренировке: предлагаем создать упражнение
+    const typed = p.query.trim();
+    const exists = !!q && (p.list.some(it => this.normName(it.name) === q) ||
+      this.getPickerExercises(p.mode).some(e => this.normName(e.name) === q));
     let html = '';
+    if (typed && !exists) {
+      html += `<div class="pk-row pk-create" role="button" onclick="app.addCustomPickerExercise(true)">` +
+        `<span class="pk-box"><img class="icon" src="./icons/plus.svg" alt=""></span>` +
+        `<span class="pk-name">Добавить «${this.escapeHtml(typed)}»</span></div>`;
+    }
     if (rows.length === 0) {
-      html = `<div class="pk-empty">${p.query.trim()
-        ? 'Ничего не найдено. Нажмите «+», чтобы создать упражнение.'
-        : 'Нет упражнений для выбора. Введите название и нажмите «+».'}</div>`;
+      if (!typed) html += '<div class="pk-empty">Нет упражнений для выбора. Введите название, чтобы создать своё.</div>';
+      else if (exists) html += '<div class="pk-empty">Это упражнение уже есть в тренировке.</div>';
     } else {
-      html = rows.map(({ it, i }) => {
+      html += rows.map(({ it, i }) => {
         const sel = p.selected.includes(i);
+        const del = it.id
+          ? `<button type="button" class="card-menu-btn pk-del" onclick="event.stopPropagation(); app.askDeletePickerExercise(${i})" title="Удалить из списка" aria-label="Удалить из списка: ${this.escapeHtml(it.name)}"><img class="icon" src="./icons/trash.svg" alt=""></button>`
+          : '';
         return `<div class="pk-row${sel ? ' selected' : ''}" role="checkbox" aria-checked="${sel}" onclick="app.togglePickerItem(${i})">` +
           `<span class="pk-box">${sel ? '<img class="icon" src="./icons/check.svg" alt="">' : ''}</span>` +
-          `<span class="pk-name">${this.escapeHtml(it.name)}</span></div>`;
+          `<span class="pk-name">${this.escapeHtml(it.name)}</span>${del}</div>`;
       }).join('');
     }
     document.getElementById('pickerList').innerHTML = html;
@@ -1170,8 +1216,9 @@ class GymApp {
     this.renderExercisePicker();
   }
 
-  // Кнопка «+»: создать своё упражнение с названием из строки поиска
-  addCustomPickerExercise() {
+  // «Добавить «название»» в списке или кнопка «+»: создать своё упражнение с названием из строки поиска.
+  // direct — сразу добавить его (вместе с уже отмеченными) и закрыть выбор
+  addCustomPickerExercise(direct = false) {
     const p = this.picker;
     if (!p) return;
     const inp = document.getElementById('pickerSearch');
@@ -1191,6 +1238,11 @@ class GymApp {
       p.list.unshift({ id: null, name });
       p.selected = p.selected.map(x => x + 1);
       idx = 0;
+      // Если такое упражнение раньше удаляли из списка, оно снова становится доступным
+      if (this.hiddenExercises.includes(key)) {
+        this.hiddenExercises = this.hiddenExercises.filter(n => n !== key);
+        this.saveHiddenExercises();
+      }
     }
     if (!p.selected.includes(idx)) {
       if (p.mode === 'replace') p.selected = [idx];
@@ -1198,6 +1250,42 @@ class GymApp {
     }
     inp.value = '';
     this.onPickerInput(inp);
+    if (direct) this.confirmExercisePicker();
+  }
+
+  // Удаление упражнения из списка выбора — только после подтверждения
+  askDeletePickerExercise(i) {
+    const p = this.picker;
+    const item = p && p.list[i];
+    if (!item) return;
+    this.hidePicker();
+    this.openConfirmSheet({
+      title: 'Удалить упражнение?',
+      text: `«${item.name}» будет удалено из списка упражнений. История тренировок и текущие программы останутся без изменений.`,
+      okLabel: 'Удалить',
+      onOk: () => this.deletePickerExercise(item.name),
+      onCancel: () => this.showPicker()
+    });
+  }
+
+  deletePickerExercise(name) {
+    const key = this.normName(name);
+    if (key && !this.hiddenExercises.includes(key)) {
+      this.hiddenExercises.push(key);
+      this.saveHiddenExercises();
+    }
+    const p = this.picker;
+    if (p) {
+      const selectedNames = p.selected.map(x => p.list[x] && this.normName(p.list[x].name));
+      p.list = p.list.filter(it => this.normName(it.name) !== key);
+      p.selected = selectedNames
+        .filter(n => n && n !== key)
+        .map(n => p.list.findIndex(it => this.normName(it.name) === n))
+        .filter(x => x !== -1);
+      this.showPicker();
+      this.renderExercisePicker();
+    }
+    this.showToast('Упражнение удалено');
   }
 
   // Находит или создаёт id упражнения по выбранному пункту списка
@@ -1284,11 +1372,14 @@ class GymApp {
 
     const oldEntry = this.activeWorkout.entries.find(e => e.exerciseId === oldId);
     if (oldEntry && oldEntry.sets.length > 0) {
+      // Подтверждение показываем вместо выбора, а не поверх него; при отмене выбор возвращается
+      this.hidePicker();
       this.openConfirmSheet({
         title: 'Заменить упражнение?',
         text: 'Упражнение уже отмечено выполненным. При замене записанные подходы будут удалены.',
         okLabel: 'Заменить',
-        onOk: run
+        onOk: run,
+        onCancel: () => this.showPicker()
       });
     } else {
       run();
@@ -2992,7 +3083,8 @@ class GymApp {
       programs: this.programs,
       currentProgramId: this.currentProgramId,
       workoutLogs: this.workoutLogs,
-      exerciseNames: this.exerciseNames
+      exerciseNames: this.exerciseNames,
+      hiddenExercises: this.hiddenExercises
     };
     const jsonStr = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -3055,10 +3147,12 @@ class GymApp {
     this.currentProgramId = data.currentProgramId || data.programs[0].id;
     this.workoutLogs = Array.isArray(data.workoutLogs) ? data.workoutLogs : [];
     this.exerciseNames = (data.exerciseNames && typeof data.exerciseNames === 'object') ? data.exerciseNames : {};
+    this.hiddenExercises = Array.isArray(data.hiddenExercises) ? data.hiddenExercises : [];
     this.activeWorkout = null;
     this.savePrograms();
     this.saveWorkoutLogs();
     this.saveExerciseNames();
+    this.saveHiddenExercises();
     this.saveActiveWorkout();
     this.populateExerciseSelect();
     this.renderHome();
@@ -3069,6 +3163,7 @@ class GymApp {
   wipeAllData() {
     localStorage.clear();
     this.exerciseNames = {};
+    this.hiddenExercises = [];
     this.exerciseInputState = {};
     this.programs = [];
     this.currentProgramId = null;
