@@ -31,7 +31,7 @@ class GymApp {
     this.logEdit = null;
     this.dayDraft = null;
     // Режим перестановки (карточки двигаются пальцем: зажать и потянуть)
-    this.reorder = { list: false, workout: false, day: false };
+    this.reorder = { list: false, workout: false, day: false, log: false };
     this.reorderDrag = null;
     // Упражнение, выбранное на вкладке графиков
     this.chartExerciseId = null;
@@ -506,7 +506,8 @@ class GymApp {
     const zones = [
       { scope: 'list', id: 'workoutsList', item: '.workout-card' },
       { scope: 'workout', id: 'workoutExercisesContainer', item: '.ex-card' },
-      { scope: 'day', id: 'dayEditList', item: '.edit-card' }
+      { scope: 'day', id: 'dayEditList', item: '.edit-card' },
+      { scope: 'log', id: 'logEditList', item: '.edit-card' }
     ];
     zones.forEach(z => {
       const box = document.getElementById(z.id);
@@ -651,7 +652,7 @@ class GymApp {
   }
 
   reorderButtonId(scope) {
-    return { list: 'btnReorderList', workout: 'btnReorderWorkout', day: 'btnReorderDay' }[scope];
+    return { list: 'btnReorderList', workout: 'btnReorderWorkout', day: 'btnReorderDay', log: 'btnReorderLog' }[scope];
   }
 
   toggleReorder(scope) {
@@ -672,12 +673,17 @@ class GymApp {
     if (scope === 'list') this.renderHome();
     else if (scope === 'workout') this.renderWorkoutScreen();
     else if (scope === 'day') this.renderDayEdit();
+    else if (scope === 'log') {
+      // Введённые, но ещё не сохранённые значения переносим в черновик, чтобы они не пропали при перерисовке
+      this.syncLogEditFromDom();
+      this.renderLogEdit();
+    }
   }
 
   // При уходе с экрана режим перестановки выключается
   resetReorder() {
     this.endReorderDrag(true);
-    ['list', 'workout', 'day'].forEach(scope => {
+    ['list', 'workout', 'day', 'log'].forEach(scope => {
       if (this.reorder[scope]) {
         this.reorder[scope] = false;
         this.applyReorderState(scope);
@@ -690,6 +696,7 @@ class GymApp {
     const keys = d.items.map(it => {
       if (d.zone.scope === 'list') return it.dataset.dayId;
       if (d.zone.scope === 'workout') return it.dataset.exerciseId;
+      if (d.zone.scope === 'log') return parseInt(it.dataset.logExIndex, 10);
       return parseInt(it.dataset.dayExIndex, 10);
     });
     const [moved] = keys.splice(d.from, 1);
@@ -714,6 +721,14 @@ class GymApp {
       arr.splice(0, arr.length, ...ordered);
       this.saveActiveWorkout();
       this.renderWorkoutScreen();
+    } else if (d.zone.scope === 'log') {
+      if (!this.logEdit) return;
+      this.syncLogEditFromDom();
+      const old = this.logEdit.items;
+      const ordered = keys.map(i => old[i]).filter(Boolean);
+      if (ordered.length !== old.length) return;
+      this.logEdit.items = ordered;
+      this.renderLogEdit();
     } else {
       if (!this.dayDraft) return;
       const old = this.dayDraft.exercises;
@@ -2509,6 +2524,8 @@ class GymApp {
     if (!st) return;
     document.getElementById('logEditTitle').textContent = st.title;
     const list = document.getElementById('logEditList');
+    const rm = this.reorder.log;
+    list.classList.toggle('reorder-on', rm);
     if (st.items.length === 0) {
       list.innerHTML = `
         <div class="empty-state">
@@ -2519,12 +2536,12 @@ class GymApp {
       return;
     }
     list.innerHTML = st.items.map((it, i) => `
-      <div class="edit-card">
+      <div class="edit-card" data-log-ex-index="${i}">
         <div class="workout-card-header">
           <div class="workout-card-title">${this.escapeHtml(it.name)}</div>
-          <button class="card-menu-btn" onclick="app.askRemoveLogExercise(${i})" title="Удалить упражнение" aria-label="Удалить упражнение">
+          ${rm ? '' : `<button class="card-menu-btn" onclick="app.askRemoveLogExercise(${i})" title="Удалить упражнение" aria-label="Удалить упражнение">
             <img class="icon" src="./icons/trash.svg" alt="">
-          </button>
+          </button>`}
         </div>
         <div class="metric-group">
           ${this.metricItemHtml(`data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onLogEditInput(this)" aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
@@ -2624,29 +2641,47 @@ class GymApp {
     }
 
     const now = Date.now();
-    const entries = (log.entries || []).map((entry, idx) => {
-      if (!entry.sets || entry.sets.length === 0) return entry;
-      const p = parsed.get(idx);
-      if (!p) return null; // упражнение удалено
-      const unchanged = p.weight === p.orig.weight && p.reps === p.orig.reps && p.count === p.orig.count;
-      if (unchanged) return entry; // не трогаем подходы, чтобы не потерять разные веса и повторы
-      const ts = entry.sets[0].timestamp || now;
-      return Object.assign({}, entry, {
-        sets: Array.from({ length: p.count }, () => ({ weight: p.weight, reps: p.reps, timestamp: ts }))
-      });
-    }).filter(Boolean);
+    const entries = log.entries || [];
+    const used = new Set();
+    const result = [];
 
-    // Новые упражнения: если в записи уже есть пустая отметка этого упражнения, заполняем её, иначе добавляем новую
-    added.forEach(a => {
+    // Записи собираются в том порядке, в котором карточки стоят на экране
+    st.items.forEach(it => {
+      const p = parsed.get(it.entryIndex);
+      if (it.entryIndex != null) {
+        const entry = entries[it.entryIndex];
+        if (!entry || !p) return;
+        used.add(it.entryIndex);
+        const unchanged = p.weight === p.orig.weight && p.reps === p.orig.reps && p.count === p.orig.count;
+        if (unchanged) { result.push(entry); return; } // не трогаем подходы, чтобы не потерять разные веса и повторы
+        const ts = entry.sets[0].timestamp || now;
+        result.push(Object.assign({}, entry, {
+          sets: Array.from({ length: p.count }, () => ({ weight: p.weight, reps: p.reps, timestamp: ts }))
+        }));
+        return;
+      }
+      // Новое упражнение: если в записи уже есть пустая отметка этого упражнения, заполняем её, иначе добавляем новую
+      const a = added.find(x => x.exerciseId === it.exerciseId);
+      if (!a) return;
       const sets = Array.from({ length: a.count }, () => ({ weight: a.weight, reps: a.reps, timestamp: now }));
-      const existing = entries.find(e => e.exerciseId === a.exerciseId);
-      if (existing) existing.sets = sets;
-      else entries.push({ exerciseId: a.exerciseId, sets });
+      const emptyIdx = entries.findIndex((e, idx) => !used.has(idx) && e.exerciseId === a.exerciseId && (!e.sets || e.sets.length === 0));
+      if (emptyIdx >= 0) {
+        used.add(emptyIdx);
+        result.push(Object.assign({}, entries[emptyIdx], { sets }));
+      } else {
+        result.push({ exerciseId: a.exerciseId, sets });
+      }
       if (Array.isArray(log.exercises) && !log.exercises.some(x => x.id === a.exerciseId)) {
         log.exercises.push({ id: a.exerciseId, name: a.name, targetSets: a.count, targetReps: String(a.reps), notes: '' });
       }
     });
-    log.entries = entries;
+
+    // Пустые отметки без подходов в редактор не попадают; оставляем их в конце, ничего не теряя
+    entries.forEach((entry, idx) => {
+      if (used.has(idx)) return;
+      if (!entry.sets || entry.sets.length === 0) result.push(entry);
+    });
+    log.entries = result;
 
     this.saveWorkoutLogs();
     this.logEdit = null;

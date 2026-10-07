@@ -303,6 +303,9 @@ body {
   font-family: inherit; font-weight: 590; color: var(--white-100); cursor: pointer;
 }
 .de-screen .page-header .de-title.is-empty { color: var(--white-50); }
+/* Редактирование записи из истории: название по центру между кнопками «назад» и «порядок» */
+#viewLogEdit .page-header { gap: 12px; }
+#viewLogEdit .page-header .le-title { flex: 1 1 0; text-align: center; margin: 0; }
 .de-field { display: flex; flex-direction: column; gap: var(--gap); margin-bottom: 32px; }
 .de-label { font-size: 14px; line-height: 24px; color: var(--white-80); }
 .de-input {

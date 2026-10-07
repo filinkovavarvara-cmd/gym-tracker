@@ -174,7 +174,10 @@
         <button class="btn-round" onclick="app.navigate('viewHistory')" title="Назад" aria-label="Назад">
           <img class="icon" src="./icons/caret-left.svg" alt="">
         </button>
-        <h2 id="logEditTitle" class="page-title page-title-sm page-title-ellipsis"></h2>
+        <h2 id="logEditTitle" class="page-title page-title-sm page-title-ellipsis le-title"></h2>
+        <button id="btnReorderLog" class="btn-round" onclick="app.toggleReorder('log')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
+          <img class="icon" src="./icons/arrows-down-up.svg" alt="">
+        </button>
       </div>
       <div id="logEditList" class="edit-list"></div>
       <button class="btn-pill btn-pill-lg wk-add" onclick="app.openExercisePicker('log')">
