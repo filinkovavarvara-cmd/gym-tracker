@@ -1364,7 +1364,7 @@ class GymApp {
       if (!this.activeWorkout.entries.some(e => e.exerciseId === id)) {
         this.activeWorkout.entries.push({ exerciseId: id, sets: [] });
       }
-      delete this.exerciseInputState[id];
+      this.clearExerciseInput(id);
       added++;
     });
     this.saveActiveWorkout();
@@ -1397,8 +1397,8 @@ class GymApp {
       };
       this.activeWorkout.entries = this.activeWorkout.entries.filter(e => e.exerciseId !== oldId);
       this.activeWorkout.entries.push({ exerciseId: newId, sets: [] });
-      delete this.exerciseInputState[oldId];
-      delete this.exerciseInputState[newId];
+      this.clearExerciseInput(oldId);
+      this.clearExerciseInput(newId);
       this.saveActiveWorkout();
       this.closeExercisePicker();
       this.renderWorkoutScreen();
@@ -1447,7 +1447,7 @@ class GymApp {
         // Удаляется только из текущей тренировки, программа не меняется
         list.splice(i, 1);
         this.activeWorkout.entries = this.activeWorkout.entries.filter(e => e.exerciseId !== exId);
-        delete this.exerciseInputState[exId];
+        this.clearExerciseInput(exId);
 
         this.saveActiveWorkout();
         this.renderWorkoutScreen();
@@ -1547,29 +1547,66 @@ class GymApp {
   }
 
   // Состояние полей карточки упражнения (вес, повторы, подходы); создаётся из цели, прошлой тренировки или записанных подходов
+  // Поля пустые (null): пока пользователь ничего не ввёл, в рамках светло-серым показывается подсказка (hint)
   ensureExerciseInputState(ex, entry) {
     if (!this.exerciseInputState[ex.id]) {
-      const pastSets = this.getLastWorkoutSets(ex.id);
-      let defWeight = ex.targetWeight != null ? ex.targetWeight : 50;
-      let defReps = parseInt(ex.targetReps, 10) || 10;
-      let defCount = ex.targetSets || 3;
-      let customSets = null;
-      if (entry && entry.sets.length > 0) {
+      const cur = { weight: null, reps: null, count: null, sets: null, editing: false };
+      const saved = this.activeWorkout && this.activeWorkout.inputs && this.activeWorkout.inputs[ex.id];
+      if (entry && entry.sets && entry.sets.length > 0) {
+        // Подходы, записанные старой версией приложения
         const lastSet = entry.sets[entry.sets.length - 1];
-        defWeight = lastSet.weight;
-        defReps = lastSet.reps;
-        defCount = entry.sets.length;
+        cur.weight = lastSet.weight;
+        cur.reps = lastSet.reps;
+        cur.count = entry.sets.length;
         // Подходы с разными весами или повторами показываем по отдельности
         if (this.areSetsMixed(entry.sets)) {
-          customSets = entry.sets.map(s => ({ weight: s.weight, reps: s.reps }));
+          cur.sets = entry.sets.map(s => ({ weight: s.weight, reps: s.reps }));
         }
-      } else if (pastSets && pastSets.length > 0) {
-        defWeight = pastSets[0].weight;
-        defReps = pastSets[0].reps;
+      } else if (saved) {
+        // Ввод, сохранённый в тренировке (переживает перезапуск приложения)
+        const num = (v) => (v == null || v === '' || isNaN(Number(v))) ? null : Number(v);
+        cur.weight = num(saved.weight);
+        cur.reps = num(saved.reps);
+        cur.count = num(saved.count);
+        if (Array.isArray(saved.sets) && saved.sets.length > 0) {
+          cur.sets = saved.sets.map(s => ({ weight: num(s.weight), reps: num(s.reps) }));
+        }
       }
-      this.exerciseInputState[ex.id] = { weight: defWeight, reps: defReps, count: defCount, sets: customSets, editing: false };
+      this.exerciseInputState[ex.id] = cur;
     }
-    return this.exerciseInputState[ex.id];
+    const state = this.exerciseInputState[ex.id];
+    state.hint = this.getInputHints(ex);
+    return state;
+  }
+
+  // Подсказки для пустых полей: прошлая тренировка, затем цель упражнения
+  getInputHints(ex) {
+    const pastSets = this.getLastWorkoutSets(ex.id);
+    const hasPast = pastSets && pastSets.length > 0;
+    return {
+      weight: hasPast ? pastSets[0].weight : (ex.targetWeight != null ? ex.targetWeight : 50),
+      reps: hasPast ? pastSets[0].reps : (parseInt(ex.targetReps, 10) || 10),
+      count: ex.targetSets || 3
+    };
+  }
+
+  // Сохраняет введённые значения упражнения в активную тренировку, чтобы они не пропали при перезапуске
+  persistExerciseInput(exId) {
+    const cur = this.exerciseInputState[exId];
+    if (!this.activeWorkout || !cur) return;
+    if (!this.activeWorkout.inputs) this.activeWorkout.inputs = {};
+    this.activeWorkout.inputs[exId] = {
+      weight: cur.weight,
+      reps: cur.reps,
+      count: cur.count,
+      sets: cur.sets ? cur.sets.map(s => ({ weight: s.weight, reps: s.reps })) : null
+    };
+    this.saveActiveWorkout();
+  }
+
+  clearExerciseInput(exId) {
+    delete this.exerciseInputState[exId];
+    if (this.activeWorkout && this.activeWorkout.inputs) delete this.activeWorkout.inputs[exId];
   }
 
   renderWorkoutScreen() {
@@ -1718,11 +1755,12 @@ class GymApp {
   }
 
   // Наибольший вес среди введённых подходов (для подсказки о рекорде)
+  // Читает введённые значения; null = поле не заполнено
   getInputMaxWeight(cur) {
     if (cur.sets && cur.sets.length > 0) {
       return cur.sets.reduce((m, s) => Math.max(m, Number(s.weight) || 0), 0);
     }
-    return cur.weight;
+    return Number(cur.weight) || 0;
   }
 
   // Короткая запись разных подходов: «60 кг × 10 (×2) · 65 кг × 8»
@@ -1740,29 +1778,38 @@ class GymApp {
   }
 
   renderMetricsHtml(exId, cur) {
+    const h = cur.hint || { weight: 0, reps: 0, count: 0 };
+    if (cur.sets && cur.sets.some(s => Number(s.reps) > 0)) {
+      return `<div class="metric-group"><div class="sets-summary" id="setsSummary_${exId}">${this.escapeHtml(this.summarizeSets(cur.sets.filter(s => Number(s.reps) > 0)))}</div></div>`;
+    }
     if (cur.sets) {
-      return `<div class="metric-group"><div class="sets-summary" id="setsSummary_${exId}">${this.escapeHtml(this.summarizeSets(cur.sets))}</div></div>`;
+      // Подходы по отдельности ещё не заполнены: серая подсказка
+      return `<div class="metric-group"><div class="sets-summary is-empty" id="setsSummary_${exId}">${this.escapeHtml(`${h.weight} кг × ${h.reps} раз`)}</div></div>`;
     }
     return `<div class="metric-group">
-              ${this.metricButtonHtml(exId, 'weight', null, `${cur.weight} кг`, 'Вес, кг')}
-              ${this.metricButtonHtml(exId, 'reps', null, `${cur.reps} раз`, 'Повторы')}
-              ${this.metricButtonHtml(exId, 'count', null, `${cur.count} подх.`, 'Подходы')}
+              ${this.metricButtonHtml(exId, 'weight', null, cur.weight, h.weight, 'кг', 'Вес, кг')}
+              ${this.metricButtonHtml(exId, 'reps', null, cur.reps, h.reps, 'раз', 'Повторы')}
+              ${this.metricButtonHtml(exId, 'count', null, cur.count, h.count, 'подх.', 'Подходы')}
             </div>`;
   }
 
-  // Рамка-кнопка «50 кг»: подпись внутри рамки, значение меняется через цифровую шторку
-  metricButtonHtml(exId, field, index, text, label) {
+  // Рамка-кнопка «50 кг»: если значение не введено (null), внутри светло-серая подсказка; значение меняется через цифровую шторку
+  metricButtonHtml(exId, field, index, value, hint, unit, label) {
     const idx = index == null ? 'null' : index;
-    return `<button type="button" class="metric-pill metric-btn" onclick="app.openNumpad('${exId}', '${field}', ${idx})" aria-label="${this.escapeHtml(label)}: ${this.escapeHtml(text)}">${this.escapeHtml(text)}</button>`;
+    const empty = value == null;
+    const text = `${empty ? hint : value} ${unit}`;
+    const aria = empty ? `${label}: не заполнено, например ${text}` : `${label}: ${text}`;
+    return `<button type="button" class="metric-pill metric-btn${empty ? ' is-empty' : ''}" onclick="app.openNumpad('${exId}', '${field}', ${idx})" aria-label="${this.escapeHtml(aria)}">${this.escapeHtml(text)}</button>`;
   }
 
   // Редактор «каждый подход отдельно»
   renderSetsEditorHtml(exId, cur) {
+    const h = cur.hint || { weight: 0, reps: 0, count: 0 };
     const rows = cur.sets.map((s, i) => `
             <div class="set-row">
               <span class="set-num">${i + 1}</span>
-              ${this.metricButtonHtml(exId, 'weight', i, `${s.weight} кг`, `Подход ${i + 1}, вес, кг`)}
-              ${this.metricButtonHtml(exId, 'reps', i, `${s.reps} раз`, `Подход ${i + 1}, повторы`)}
+              ${this.metricButtonHtml(exId, 'weight', i, s.weight, h.weight, 'кг', `Подход ${i + 1}, вес, кг`)}
+              ${this.metricButtonHtml(exId, 'reps', i, s.reps, h.reps, 'раз', `Подход ${i + 1}, повторы`)}
               <button class="set-remove" onclick="app.removeSetRow('${exId}', ${i})" title="Удалить подход" aria-label="Удалить подход ${i + 1}">
                 <img class="icon icon-20" src="./icons/x.svg" alt="">
               </button>
@@ -1778,27 +1825,26 @@ class GymApp {
     const cur = this.exerciseInputState[exId];
     if (!cur) return;
     if (cur.editing) {
-      // Если после правок все подходы одинаковые, возвращаемся к обычным полям
-      if (cur.sets && cur.sets.length > 0) {
+      if (cur.sets && cur.sets.every(s => s.weight == null && s.reps == null)) {
+        // Ничего не введено: возвращаемся к обычным пустым полям
+        cur.sets = null;
+      } else if (cur.sets && cur.sets.length > 0) {
+        // Если после правок все подходы одинаковые, возвращаемся к обычным полям
+        const last = cur.sets[cur.sets.length - 1];
         cur.count = cur.sets.length;
-        cur.weight = cur.sets[cur.sets.length - 1].weight;
-        cur.reps = cur.sets[cur.sets.length - 1].reps;
+        cur.weight = last.weight;
+        cur.reps = last.reps;
         if (!this.areSetsMixed(cur.sets)) cur.sets = null;
       }
       cur.editing = false;
     } else {
       if (!cur.sets) {
-        const v = this.readExerciseInputs(exId);
-        if (!v) return;
-        if (v.count < 1 || v.count > 50) {
-          this.showToast('Укажите число подходов от 1 до 50');
-          return;
-        }
-        Object.assign(cur, v);
-        cur.sets = Array.from({ length: v.count }, () => ({ weight: v.weight, reps: v.reps }));
+        const n = Math.min(50, Math.max(1, parseInt(cur.count, 10) || (cur.hint && cur.hint.count) || 1));
+        cur.sets = Array.from({ length: n }, () => ({ weight: cur.weight, reps: cur.reps }));
       }
       cur.editing = true;
     }
+    this.persistExerciseInput(exId);
     this.renderWorkoutScreen();
   }
 
@@ -1809,7 +1855,9 @@ class GymApp {
     const sets = index != null ? cur.sets : null;
     if (index != null && (!sets || !sets[index])) return;
     const value = index != null ? sets[index][field] : cur[field];
-    this.numpad = { exId, field, index, text: String(Number(value) || 0) };
+    const hint = cur.hint && cur.hint[field] != null ? Number(cur.hint[field]) : 0;
+    // Пустое значение (null) — text '': на шторке серая подсказка, шаги − / + отсчитываются от неё
+    this.numpad = { exId, field, index, hint, text: value == null ? '' : String(Number(value) || 0) };
     this.renderNumpad();
     this.openModal('numpadSheet');
   }
@@ -1835,11 +1883,15 @@ class GymApp {
     const np = this.numpad;
     if (!np) return;
     const captions = { weight: 'Вес, кг', reps: 'Повторы', count: 'Подходы' };
-    const value = parseFloat(np.text) || 0;
+    const empty = np.text === '';
+    // Пока ничего не введено, показываем светло-серую подсказку и отсчитываем шаги от неё
+    const value = empty ? (Number(np.hint) || 0) : (parseFloat(np.text) || 0);
     const step = this.getNumpadStep(np.field);
     const max = this.getNumpadLimit(np.field);
     document.getElementById('numpadCaption').textContent = captions[np.field] || '';
-    document.getElementById('numpadValue').textContent = np.text === '' ? '0' : np.text;
+    const valueEl = document.getElementById('numpadValue');
+    valueEl.textContent = empty ? this.formatNumpadNumber(value) : np.text;
+    valueEl.classList.toggle('is-empty', empty);
     document.getElementById('numpadPrev').textContent = value - step >= 0 ? this.formatNumpadNumber(value - step) : '';
     document.getElementById('numpadNext').textContent = value + step <= max ? this.formatNumpadNumber(value + step) : '';
     document.getElementById('numpadDot').disabled = np.field !== 'weight';
@@ -1859,8 +1911,9 @@ class GymApp {
       t = (t === '0' || t === '') ? k : t + k;
     }
     if (t.includes('.') && t.split('.')[1].length > 2) return;
-    const v = parseFloat(t) || 0;
-    if (v > this.getNumpadLimit(np.field)) return;
+    // Пустая строка — поле снова не заполнено (null)
+    const v = t === '' ? null : (parseFloat(t) || 0);
+    if (v != null && v > this.getNumpadLimit(np.field)) return;
     np.text = t;
     this.applyNumpadValue(v);
   }
@@ -1870,21 +1923,23 @@ class GymApp {
     const np = this.numpad;
     if (!np) return;
     const step = this.getNumpadStep(np.field);
-    const v = Math.min(this.getNumpadLimit(np.field), Math.max(0, (parseFloat(np.text) || 0) + dir * step));
+    const base = np.text === '' ? (Number(np.hint) || 0) : (parseFloat(np.text) || 0);
+    const v = Math.min(this.getNumpadLimit(np.field), Math.max(0, base + dir * step));
     np.text = this.formatNumpadNumber(v);
     this.applyNumpadValue(v);
   }
 
-  // Записывает значение в карточку, обновляет рекорд и уже отмеченные подходы
+  // Записывает значение (или null для пустого поля) в карточку и обновляет подсказку о рекорде
   applyNumpadValue(v) {
     const np = this.numpad;
     const cur = np && this.exerciseInputState[np.exId];
     if (!cur) return;
+    const val = v == null ? null : (np.field === 'weight' ? v : Math.round(v));
     if (np.index != null) {
       if (!cur.sets || !cur.sets[np.index]) return;
-      cur.sets[np.index][np.field] = np.field === 'weight' ? v : Math.round(v);
+      cur.sets[np.index][np.field] = val;
     } else {
-      cur[np.field] = np.field === 'weight' ? v : Math.round(v);
+      cur[np.field] = val;
     }
     this.renderNumpad();
     this.updateLivePR(np.exId);
@@ -1933,19 +1988,22 @@ class GymApp {
     }
   }
 
-  // Если упражнение уже отмечено выполненным, изменения сразу попадают в записанные подходы
+  // Сохраняет ввод в активную тренировку; подходы, записанные старой версией приложения, обновляются вместе с вводом
   syncEntryFromInput(exId) {
     const cur = this.exerciseInputState[exId];
+    if (!cur) return;
+    this.persistExerciseInput(exId);
     const entry = this.activeWorkout && this.activeWorkout.entries.find(e => e.exerciseId === exId);
-    if (!cur || !entry || entry.sets.length === 0) return;
+    if (!entry || entry.sets.length === 0) return;
     const ts = entry.sets[0].timestamp || Date.now();
     if (cur.sets) {
-      if (cur.sets.length >= 1 && cur.sets.every(s => s.reps >= 1)) {
-        entry.sets = cur.sets.map(s => ({ weight: s.weight, reps: s.reps, timestamp: ts }));
+      const rows = cur.sets.filter(s => Number(s.reps) >= 1);
+      if (rows.length >= 1) {
+        entry.sets = rows.map(s => ({ weight: Number(s.weight) || 0, reps: s.reps, timestamp: ts }));
         this.saveActiveWorkout();
       }
     } else if (cur.reps >= 1 && cur.count >= 1) {
-      entry.sets = this.buildSets(cur.weight, cur.reps, cur.count, ts);
+      entry.sets = this.buildSets(Number(cur.weight) || 0, cur.reps, cur.count, ts);
       this.saveActiveWorkout();
     }
   }
@@ -1977,8 +2035,9 @@ class GymApp {
   }
 
   // Сводка по тренировке: выполненные упражнения, подходы и тоннаж (вес × повторы)
-  // Упражнения без отметки перед сохранением получают подходы из введённых значений карточки,
-  // чтобы ни одно упражнение тренировки не потерялось. Отмеченные упражнения не меняются.
+  // Перед сохранением подходы собираются из введённых значений карточек. Упражнение записывается,
+  // только если указаны повторы: пустой вес считается 0 (свой вес), пустое число подходов — одним подходом.
+  // Упражнения без повторов не сохраняются. Уже записанные подходы не меняются.
   fillUncheckedEntries(w) {
     const exercises = Array.isArray(w.exercises) ? w.exercises : [];
     if (!Array.isArray(w.entries)) w.entries = [];
@@ -1997,8 +2056,8 @@ class GymApp {
         timestamp: now
       });
       if (cur.sets && cur.sets.length > 0) {
-        entry.sets = cur.sets.slice(0, 50).map(s => toSet(s.weight, s.reps));
-      } else {
+        entry.sets = cur.sets.slice(0, 50).filter(s => (parseInt(s.reps, 10) || 0) >= 1).map(s => toSet(s.weight, s.reps));
+      } else if ((parseInt(cur.reps, 10) || 0) >= 1) {
         const count = Math.min(50, Math.max(1, parseInt(cur.count, 10) || 1));
         entry.sets = Array.from({ length: count }, () => toSet(cur.weight, cur.reps));
       }
@@ -2038,11 +2097,13 @@ class GymApp {
     if (!this.activeWorkout) return;
     // В сводке считаем и упражнения без отметки: они тоже будут сохранены
     const st = this.getWorkoutStats(this.fillUncheckedEntries(JSON.parse(JSON.stringify(this.activeWorkout))));
+    const skipped = (this.activeWorkout.exercises || []).length - st.exercises;
+    let text = 'Все упражнения и их подходы будут сохранены';
+    if (st.sets === 0) text = 'Вы не записали ни одного подхода. Всё равно завершить тренировку?';
+    else if (skipped > 0) text = `Не будут сохранены упражнения без повторов: ${skipped}`;
     this.openConfirmSheet({
       title: 'Завершить тренировку?',
-      text: st.sets === 0
-        ? 'Вы не записали ни одного подхода. Всё равно завершить тренировку?'
-        : 'Все упражнения и их подходы будут сохранены',
+      text,
       stats: [
         `${st.exercises} ${this.pluralExercises(st.exercises)}`,
         `${st.sets} ${this.pluralSets(st.sets)}`,
@@ -2062,6 +2123,8 @@ class GymApp {
 
     // Время окончания сохраняем вместе с тренировкой (date = время начала, проставлено при старте)
     workout.endedAt = new Date().toISOString();
+    // Черновик ввода нужен только во время тренировки
+    delete workout.inputs;
     this.workoutLogs.push(workout);
     this.saveWorkoutLogs();
 
@@ -2228,7 +2291,7 @@ class GymApp {
       html += `
         <div class="history-item">
           <div class="history-date">${this.formatHistoryDate(log.date)}</div>
-          <div class="history-card" onclick="app.toggleHistoryDetails('${log.id}')">
+          <div class="history-card">
             <div class="workout-card-header">
               <div class="workout-card-title">${this.escapeHtml(dayName)}</div>
               <button class="card-menu-btn" onclick="app.toggleCardMenu(event, 'h_${log.id}')" title="Меню" aria-label="Меню">
@@ -2255,7 +2318,7 @@ class GymApp {
     container.innerHTML = html;
   }
 
-  // Подряд идущие одинаковые подходы схлопываются: «60 кг × 8 — 3 подхода»
+  // Подряд идущие одинаковые подходы схлопываются в одну строку слева: «60 кг по 10 раз 3 подхода»
   groupSetsHtml(sets) {
     const groups = [];
     sets.forEach(s => {
@@ -2264,8 +2327,9 @@ class GymApp {
       else groups.push({ weight: s.weight, reps: s.reps, count: 1 });
     });
     return groups.map(g => {
-      const label = g.weight > 0 ? `${g.weight} кг × ${g.reps}` : `${g.reps} повт.`;
-      return `<div class="history-set-row"><span class="history-set-val">${label}</span><span class="history-set-count">${g.count} ${this.pluralSets(g.count)}</span></div>`;
+      const reps = `${g.reps} раз`;
+      const label = Number(g.weight) > 0 ? `${g.weight} кг по ${reps}` : reps;
+      return `<div class="history-set-row">${label} ${g.count} ${this.pluralSets(g.count)}</div>`;
     }).join('');
   }
 
@@ -2336,11 +2400,6 @@ class GymApp {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const weekday = d.toLocaleDateString('ru-RU', { weekday: 'long' });
     return `${dd}.${mm}.${d.getFullYear()}<span class="meta-dot">•</span>${weekday.charAt(0).toUpperCase() + weekday.slice(1)}`;
-  }
-
-  toggleHistoryDetails(logId) {
-    const el = document.getElementById(`histDetails_${logId}`);
-    if (el) el.classList.toggle('open');
   }
 
   deleteLog(logId) {
