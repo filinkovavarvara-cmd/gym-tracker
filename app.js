@@ -2289,7 +2289,7 @@ class GymApp {
           <div class="history-date">${this.formatHistoryDate(log.date)}</div>
           <div class="history-card">
             <div class="workout-card-header">
-              <div class="workout-card-title">${this.escapeHtml(dayName)}</div>
+              <div class="workout-card-title history-workout-title">${this.escapeHtml(dayName)}</div>
               <button class="card-menu-btn" onclick="app.toggleCardMenu(event, 'h_${log.id}')" title="Меню" aria-label="Меню">
                 <img class="icon" src="./icons/dots-three.svg" alt="">
               </button>

@@ -47,7 +47,8 @@ body {
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .history-list { display: flex; flex-direction: column; gap: 24px; margin-top: 24px; }
 .history-item { display: flex; flex-direction: column; gap: var(--gap); }
-.history-date { padding: 0 var(--gap); font-size: 24px; line-height: 32px; font-weight: 590; color: var(--white-50); }
+.history-date { padding: 0 var(--gap); font-size: 16px; line-height: 24px; font-weight: 400; color: var(--white-50); }
+.history-card .workout-card-title.history-workout-title { font-size: 24px; line-height: 32px; font-weight: 590; }
 .meta-dot { margin: 0 8px; }
 .history-card {
   position: relative; background: var(--color-surface); border-radius: var(--r-24);
