@@ -168,12 +168,7 @@ class GymApp {
   }
 
   navigate(viewId) {
-    // Активная тренировка — сфокусированный режим: уйти с экрана можно только завершив её
-    const workoutView = document.getElementById('viewWorkout');
-    if (this.activeWorkout && viewId !== 'viewWorkout' && workoutView && workoutView.classList.contains('active')) {
-      this.finishWorkout();
-      return;
-    }
+    // Во время тренировки можно свободно ходить по разделам: она остаётся активной и открывается карточкой в списке тренировок
     this.resetReorder();
     document.querySelectorAll('.view-screen').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
