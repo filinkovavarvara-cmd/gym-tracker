@@ -2256,15 +2256,11 @@ class GymApp {
       const dayObj = this.programs.reduce((found, p) => found || p.days.find(d => d.id === log.dayId), null);
       const dayName = log.dayName || (dayObj ? dayObj.name : 'Тренировка');
 
-      let totalSets = 0;
-      let totalVolume = 0;
       let exercisesDetailsHtml = '';
 
       if (log.entries) {
         log.entries.forEach(e => {
           if (e.sets && e.sets.length > 0) {
-            totalSets += e.sets.length;
-            e.sets.forEach(s => { totalVolume += (s.weight * s.reps); });
             const exName = this.findExerciseName(e.exerciseId);
             const logEx = Array.isArray(log.exercises) ? log.exercises.find(x => x.id === e.exerciseId) : null;
             const exNote = logEx && logEx.notes ? `<div class="history-exercise-note">${this.escapeHtml(logEx.notes)}</div>` : '';
@@ -2298,7 +2294,6 @@ class GymApp {
                 <img class="icon" src="./icons/dots-three.svg" alt="">
               </button>
             </div>
-            <div class="workout-card-meta">Подходов: ${totalSets}<span class="meta-dot">•</span>Тоннаж: ${Math.round(totalVolume)} кг</div>
             <div class="card-menu" id="cardMenu-h_${log.id}" onclick="event.stopPropagation()">
               <button class="card-menu-item" onclick="app.openLogEdit('${log.id}')">
                 <img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">Редактировать
@@ -2318,7 +2313,7 @@ class GymApp {
     container.innerHTML = html;
   }
 
-  // Подряд идущие одинаковые подходы схлопываются в одну строку слева: «60 кг по 10 раз 3 подхода»
+  // Подряд идущие одинаковые подходы схлопываются в одну строку слева: «60 кг x 3 по 10»
   groupSetsHtml(sets) {
     const groups = [];
     sets.forEach(s => {
@@ -2327,9 +2322,9 @@ class GymApp {
       else groups.push({ weight: s.weight, reps: s.reps, count: 1 });
     });
     return groups.map(g => {
-      const reps = `${g.reps} раз`;
-      const label = Number(g.weight) > 0 ? `${g.weight} кг по ${reps}` : reps;
-      return `<div class="history-set-row">${label} ${g.count} ${this.pluralSets(g.count)}</div>`;
+      const base = `${g.count} по ${g.reps}`;
+      const label = Number(g.weight) > 0 ? `${g.weight} кг x ${base}` : base;
+      return `<div class="history-set-row">${label}</div>`;
     }).join('');
   }
 
