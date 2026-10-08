@@ -42,9 +42,9 @@
 
     <!-- SCREEN 2: Экран активной тренировки -->
     <section id="viewWorkout" class="view-screen">
-      <!-- Активная тренировка — сфокусированный режим: «назад» и «сохранить» ведут к подтверждению завершения -->
+      <!-- Активная тренировка — сфокусированный режим: «назад» спрашивает об отмене, «сохранить» — о завершении -->
       <div class="wk-top">
-        <button class="btn-round" onclick="app.finishWorkout()" title="Назад" aria-label="Назад">
+        <button class="btn-round" onclick="app.cancelWorkout()" title="Назад" aria-label="Назад">
           <img class="icon" src="./icons/caret-left.svg" alt="">
         </button>
         <div class="wk-date">

@@ -207,7 +207,8 @@ class GymApp {
       const view = document.getElementById('viewWorkout');
       if (this.activeWorkout && view && view.classList.contains('active')) {
         history.pushState({ workout: true }, '');
-        this.finishWorkout();
+        // Системная «назад» равна шеврону на экране: спрашиваем об отмене
+        this.cancelWorkout();
       }
     });
   }
@@ -2131,6 +2132,7 @@ class GymApp {
   }
 
   cancelWorkout() {
+    if (!this.activeWorkout) return;
     this.openConfirmSheet({
       title: 'Отменить тренировку?',
       text: 'Текущий прогресс будет потерян без возможности восстановления.',
