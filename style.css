@@ -79,6 +79,7 @@ body {
 /* Icons (локальные SVG из Figma) */
 .icon { width: 24px; height: 24px; display: block; pointer-events: none; }
 .icon-20 { width: 20px; height: 20px; }
+.icon-32 { width: 32px; height: 32px; }
 .icon-36 { width: 36px; height: 36px; }
 
 /* Screen header (Figma: Header, 48px) */
@@ -181,7 +182,7 @@ body {
 
 /* Settings (Figma: Settings 1:1062) */
 :root { --slate-400: #94a3b8; }
-.settings-header { justify-content: flex-start; gap: 45px; margin-bottom: 56px; }
+.settings-header { justify-content: flex-start; margin-bottom: 24px; }
 .settings-list { display: flex; flex-direction: column; gap: var(--gap); }
 .settings-card { background: var(--color-surface); border-radius: var(--r-24); padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
 .settings-content { display: flex; flex-direction: column; gap: 14px; }
@@ -195,31 +196,28 @@ body {
 
 
 /* Workout/Active (Figma: Flow/02 Workout/Active 49:2070) */
-.wk-top { display: grid; grid-template-columns: var(--control-size) 1fr var(--control-size); align-items: center; gap: 12px; margin: 8px 0 32px; }
+.wk-top { display: grid; grid-template-columns: var(--control-size) 1fr var(--control-size); align-items: center; gap: 12px; margin: 8px 0 24px; }
 .wk-date { grid-column: 2; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 16px; line-height: 24px; color: var(--white-80); }
 .wk-dot { width: 4px; height: 4px; border-radius: var(--r-100); background: var(--white-80); flex: none; }
-.wk-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 2px; }
-.wk-timer { font-size: 60px; line-height: 72px; font-weight: 590; color: var(--white-100); font-variant-numeric: tabular-nums; }
-.wk-timer-btns { display: flex; gap: var(--gap); flex: none; }
+/* Название тренировки 40px + иконка перестановки 32px без фона и контейнера */
+.wk-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 24px; }
 .wk-title {
-  display: block; width: 100%; padding: 0; margin: 0 0 24px; background: transparent; border: none; text-align: left;
-  font-family: inherit; font-size: 16px; line-height: 24px; font-weight: 400; color: var(--white-80); cursor: pointer;
+  display: block; flex: 1 1 auto; min-width: 0; padding: 0; margin: 0; background: transparent; border: none; text-align: left;
+  font-family: inherit; font-size: 40px; line-height: 48px; font-weight: 590; color: var(--white-100); cursor: pointer;
   overflow-wrap: anywhere;
 }
+.btn-icon {
+  width: 40px; height: 40px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: var(--r-100); cursor: pointer;
+}
+.btn-icon:active { transform: scale(0.92); }
+.btn-icon.active { background: var(--white-20); }
 .ex-list { display: flex; flex-direction: column; gap: var(--gap); }
 .ex-card { position: relative; background: var(--color-surface); border-radius: var(--r-24); padding: 22px 16px; display: flex; flex-direction: column; gap: 24px; }
-.ex-card.done { box-shadow: inset 0 0 0 1px var(--white-100); }
 .ex-head { display: flex; flex-direction: column; gap: var(--gap); }
 .ex-sub { display: flex; flex-direction: column; gap: 2px; font-size: 14px; line-height: 20px; color: var(--white-50); }
 .ex-sub .ex-note { color: var(--white-80); font-style: italic; }
 .ex-metrics { display: flex; align-items: center; gap: 8px; }
-.ex-check {
-  width: 42px; height: 42px; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center;
-  background: var(--neutral-500); border: 1px solid var(--neutral-200); border-radius: var(--r-12); cursor: pointer;
-}
-.ex-check:active { transform: scale(0.94); }
-.ex-check.done { background: var(--neutral-200); border-color: var(--neutral-500); }
-.ex-check.done .icon { filter: brightness(0); }
 .ex-metrics .metric-group { flex: 1 1 auto; min-width: 0; gap: 10px 8px; }
 /* Рамка-кнопка с подписью внутри («50 кг»): нажатие открывает цифровую шторку */
 .metric-btn {
@@ -470,7 +468,7 @@ canvas#progressChart { display: block; width: 100% !important; height: 220px !im
 
 /* Шапка с несколькими кнопками справа */
 .header-actions { display: flex; align-items: center; gap: var(--gap); flex: none; }
-.wk-reorder { grid-column: 3; justify-self: end; }
+.wk-reorder { flex: none; }
 .btn-round.active { background: var(--white-100); }
 .btn-round.active .icon { filter: brightness(0); }
 .page-header-sm .btn-round:last-child:not(:first-child) { margin-left: auto; }

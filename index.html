@@ -42,9 +42,9 @@
 
     <!-- SCREEN 2: Экран активной тренировки -->
     <section id="viewWorkout" class="view-screen">
-      <!-- Figma: Workout/Active — шапка, таймер, карточки упражнений -->
+      <!-- Активная тренировка — сфокусированный режим: «назад» и «сохранить» ведут к подтверждению завершения -->
       <div class="wk-top">
-        <button class="btn-round" onclick="app.navigate('viewProgram')" title="Назад" aria-label="Назад">
+        <button class="btn-round" onclick="app.finishWorkout()" title="Назад" aria-label="Назад">
           <img class="icon" src="./icons/caret-left.svg" alt="">
         </button>
         <div class="wk-date">
@@ -52,22 +52,16 @@
           <span class="wk-dot"></span>
           <span id="workoutScreenWeekday">—</span>
         </div>
-        <button id="btnReorderWorkout" class="btn-round wk-reorder" onclick="app.toggleReorder('workout')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
-          <img class="icon" src="./icons/arrows-down-up.svg" alt="">
+        <button class="btn-round" onclick="app.finishWorkout()" title="Сохранить тренировку" aria-label="Сохранить тренировку">
+          <img class="icon" src="./icons/bookmark-simple.svg" alt="">
         </button>
       </div>
-      <div class="wk-timer-row">
-        <div id="workoutClock" class="wk-timer" aria-live="off">0:00</div>
-        <div class="wk-timer-btns">
-          <button class="btn-round" onclick="app.cancelWorkout()" title="Отменить" aria-label="Отменить">
-            <img class="icon" src="./icons/x.svg" alt="">
-          </button>
-          <button class="btn-round" onclick="app.finishWorkout()" title="Завершить" aria-label="Завершить">
-            <img class="icon" src="./icons/stop.svg" alt="">
-          </button>
-        </div>
+      <div class="wk-title-row">
+        <button id="workoutScreenDayName" class="wk-title" onclick="app.openRenameWorkout()" title="Переименовать тренировку">День 1</button>
+        <button id="btnReorderWorkout" class="btn-icon wk-reorder" onclick="app.toggleReorder('workout')" title="Изменить порядок" aria-label="Изменить порядок" aria-pressed="false">
+          <img class="icon icon-32" src="./icons/arrows-down-up.svg" alt="">
+        </button>
       </div>
-      <button id="workoutScreenDayName" class="wk-title" onclick="app.openRenameWorkout()" title="Переименовать тренировку">День 1</button>
 
       <div id="workoutExercisesContainer" class="ex-list"></div>
 
@@ -106,9 +100,6 @@
       <!-- Figma: History/List (Home). Для вкладки аналитики заголовок временно меняется на «График» -->
       <div class="page-header">
         <h1 id="historyTitle" class="page-title">История</h1>
-        <button id="btnHistorySettings" class="btn-round" onclick="app.navigate('viewSettings')" title="Настройки" aria-label="Настройки">
-          <img class="icon" src="./icons/faders-horizontal.svg" alt="">
-        </button>
       </div>
       <!-- Tab 1: Logs -->
       <div id="subtabContentLogs">
@@ -191,9 +182,6 @@
     <!-- SCREEN 5: Настройки & Бэкап -->
     <section id="viewSettings" class="view-screen">
       <div class="page-header settings-header">
-        <button class="btn-round" onclick="app.navigate('viewHistory')" title="Назад" aria-label="Назад">
-          <img class="icon" src="./icons/caret-left.svg" alt="">
-        </button>
         <h1 class="page-title">Настройки</h1>
       </div>
 
@@ -235,8 +223,11 @@
     <button class="nav-item active" id="navItemProgram" onclick="app.navigate('viewProgram')" title="Тренировки" aria-label="Тренировки">
       <img class="icon icon-36" src="./icons/barbell.svg" alt="">
     </button>
-    <button class="nav-item" id="navItemHome" onclick="app.openHome()" title="Главная" aria-label="Главная">
-      <img class="icon icon-36" src="./icons/house.svg" alt="">
+    <button class="nav-item" id="navItemHome" onclick="app.openHome()" title="История" aria-label="История">
+      <img class="icon icon-36" src="./icons/Rows.svg" alt="">
+    </button>
+    <button class="nav-item" id="navItemSettings" onclick="app.navigate('viewSettings')" title="Настройки" aria-label="Настройки">
+      <img class="icon icon-36" src="./icons/Wrench.svg" alt="">
     </button>
     <button class="nav-item" id="navItemAnalytics" onclick="app.openAnalytics()" title="Аналитика" aria-label="Аналитика">
       <img class="icon icon-36" src="./icons/chart-bar.svg" alt="">

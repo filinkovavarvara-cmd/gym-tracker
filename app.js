@@ -45,6 +45,7 @@ class GymApp {
     document.addEventListener('click', () => this.closeCardMenu());
     this.initReorderDrag();
     this.initSheetSwipe();
+    this.initWorkoutBackGuard();
     this.renderHome();
     this.renderHistory();
     this.initServiceWorker();
@@ -167,6 +168,12 @@ class GymApp {
   }
 
   navigate(viewId) {
+    // Активная тренировка — сфокусированный режим: уйти с экрана можно только завершив её
+    const workoutView = document.getElementById('viewWorkout');
+    if (this.activeWorkout && viewId !== 'viewWorkout' && workoutView && workoutView.classList.contains('active')) {
+      this.finishWorkout();
+      return;
+    }
     this.resetReorder();
     document.querySelectorAll('.view-screen').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -182,7 +189,7 @@ class GymApp {
       'viewDayEdit': 'navItemProgram',
       'viewHistory': this.historyTab === 'charts' ? 'navItemAnalytics' : 'navItemHome',
       'viewLogEdit': 'navItemHome',
-      'viewSettings': 'navItemHome'
+      'viewSettings': 'navItemSettings'
     };
     const activeNavId = navMap[viewId];
     if (activeNavId && document.getElementById(activeNavId)) {
@@ -192,6 +199,17 @@ class GymApp {
     if (viewId === 'viewProgram') this.renderHome();
     if (viewId === 'viewHistory') this.renderHistory();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Системная кнопка «назад» во время тренировки не уводит с экрана: вместо этого спрашиваем о завершении
+  initWorkoutBackGuard() {
+    window.addEventListener('popstate', () => {
+      const view = document.getElementById('viewWorkout');
+      if (this.activeWorkout && view && view.classList.contains('active')) {
+        history.pushState({ workout: true }, '');
+        this.finishWorkout();
+      }
+    });
   }
 
   // Кнопки нижней навигации: «Главная» и «Аналитика» пока показывают существующий экран истории
@@ -982,7 +1000,6 @@ class GymApp {
           this.saveWorkoutLogs();
           this.activeWorkout = null;
           this.saveActiveWorkout();
-          this.stopWorkoutClock();
           this.openWorkoutComplete(workout, records);
           this.startWorkout(dayId);
         },
@@ -1040,12 +1057,14 @@ class GymApp {
 
     this.renderWorkoutScreen();
     this.navigate('viewWorkout');
+    history.pushState({ workout: true }, '');
   }
 
   resumeActiveWorkout() {
     if (!this.activeWorkout || this.reorder.list) return;
     this.renderWorkoutScreen();
     this.navigate('viewWorkout');
+    history.pushState({ workout: true }, '');
   }
 
   formatDateTime(isoString, withTime = true) {
@@ -1391,7 +1410,7 @@ class GymApp {
       this.hidePicker();
       this.openConfirmSheet({
         title: 'Заменить упражнение?',
-        text: 'Упражнение уже отмечено выполненным. При замене записанные подходы будут удалены.',
+        text: 'У упражнения уже записаны подходы. При замене они будут удалены.',
         okLabel: 'Заменить',
         onOk: run,
         onCancel: () => this.showPicker()
@@ -1566,7 +1585,6 @@ class GymApp {
       ? `${pad2(startDate.getDate())}.${pad2(startDate.getMonth() + 1)}.${startDate.getFullYear()}`
       : '';
     document.getElementById('workoutScreenWeekday').textContent = validDate ? this.weekdayName(startDate) : '';
-    this.startWorkoutClock();
 
     const container = document.getElementById('workoutExercisesContainer');
     if (!container) return;
@@ -1580,7 +1598,7 @@ class GymApp {
         this.activeWorkout.entries.push(entry);
       }
 
-      // Подходы вводятся вручную: вес, повторы и число подходов; отметка «выполнено» записывает их
+      // Подходы вводятся вручную: вес, повторы и число подходов; при завершении тренировки они записываются
       const cur = this.ensureExerciseInputState(ex, entry);
       const pastSets = this.getLastWorkoutSets(ex.id);
       let pastResultText = 'Первая тренировка этого упражнения';
@@ -1590,7 +1608,6 @@ class GymApp {
 
       const histMax = this.getHistoricalMaxWeight(ex.id);
       const isRecordPotential = histMax > 0 && this.getInputMaxWeight(cur) > histMax;
-      const isDone = entry.sets.length > 0;
       const target = ex.targetSets || 3;
 
       const goal = `Цель: ${target} × ${esc(ex.targetReps || '8-10')}${histMax > 0 ? ` · Рекорд: ${histMax} кг` : ''}`;
@@ -1609,7 +1626,7 @@ class GymApp {
               </button>`;
 
       html += `
-        <div class="ex-card${isDone ? ' done' : ''}" data-exercise-id="${ex.id}">
+        <div class="ex-card" data-exercise-id="${ex.id}">
           <div class="ex-head">
             <div class="workout-card-header">
               <div class="workout-card-title">${esc(ex.name)}</div>
@@ -1629,7 +1646,6 @@ class GymApp {
             <button class="card-menu-item" onclick="app.workoutMenuAction('remove', '${ex.id}')"><img class="icon icon-20" src="./icons/trash.svg" alt="">Удалить</button>
           </div>
           <div class="ex-metrics">
-            <button class="ex-check${isDone ? ' done' : ''}" onclick="app.toggleExerciseDone('${ex.id}')" title="${isDone ? 'Снять отметку' : 'Отметить выполненным'}" aria-label="${isDone ? 'Снять отметку' : 'Отметить выполненным'}" aria-pressed="${isDone}">${isDone ? '<img class="icon" src="./icons/check.svg" alt="">' : ''}</button>
             ${this.renderMetricsHtml(ex.id, cur)}
             <button class="ex-edit-btn${cur.editing ? ' active' : ''}" onclick="app.toggleSetsEditor('${ex.id}')" title="Подходы по отдельности" aria-label="Редактировать каждый подход" aria-pressed="${cur.editing}">
               <img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">
@@ -1644,30 +1660,6 @@ class GymApp {
     container.innerHTML = html;
     container.classList.toggle('reorder-on', this.reorder.workout);
     container.querySelectorAll('.metric-input').forEach(inp => this.fitMetricInput(inp));
-  }
-
-  // Таймер тренировки (Figma: Timer/Value) — время с момента старта, переживает перезагрузку
-  startWorkoutClock() {
-    this.stopWorkoutClock();
-    const tick = () => {
-      const el = document.getElementById('workoutClock');
-      if (!el || !this.activeWorkout) return;
-      const start = new Date(this.activeWorkout.date).getTime();
-      const sec = isNaN(start) ? 0 : Math.max(0, Math.floor((Date.now() - start) / 1000));
-      const h = Math.floor(sec / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const s = sec % 60;
-      el.textContent = h > 0
-        ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-        : `${m}:${String(s).padStart(2, '0')}`;
-    };
-    tick();
-    this.workoutClockId = setInterval(tick, 1000);
-  }
-
-  stopWorkoutClock() {
-    if (this.workoutClockId) clearInterval(this.workoutClockId);
-    this.workoutClockId = null;
   }
 
   // Меню «⋯» на карточке упражнения в тренировке (Figma: Dropdown/Menu)
@@ -1959,65 +1951,6 @@ class GymApp {
 
 
 
-  // Отметка «упражнение выполнено»: записывает введённые подходы или снимает отметку
-  toggleExerciseDone(exId) {
-    if (!this.activeWorkout) return;
-    let entry = this.activeWorkout.entries.find(e => e.exerciseId === exId);
-    if (!entry) {
-      entry = { exerciseId: exId, sets: [] };
-      this.activeWorkout.entries.push(entry);
-    }
-
-    if (entry.sets.length > 0) {
-      entry.sets = [];
-      this.saveActiveWorkout();
-      this.renderWorkoutScreen();
-      return;
-    }
-
-    const cur = this.exerciseInputState[exId];
-    let planned;
-    if (cur && cur.sets) {
-      // Подходы заданы по отдельности
-      if (cur.sets.length < 1 || cur.sets.length > 50) {
-        this.showToast('Укажите число подходов от 1 до 50');
-        return;
-      }
-      if (cur.sets.some(s => s.reps < 1)) {
-        this.showToast('Укажите повторы во всех подходах');
-        return;
-      }
-      planned = cur.sets.map(s => ({ weight: s.weight, reps: s.reps }));
-    } else {
-      const v = this.readExerciseInputs(exId);
-      if (!v) return;
-      if (v.reps < 1) {
-        this.showToast('Укажите количество повторов');
-        return;
-      }
-      if (v.count < 1 || v.count > 50) {
-        this.showToast('Укажите число подходов от 1 до 50');
-        return;
-      }
-      if (cur) Object.assign(cur, v);
-      else this.exerciseInputState[exId] = Object.assign({ sets: null, editing: false }, v);
-      planned = Array.from({ length: v.count }, () => ({ weight: v.weight, reps: v.reps }));
-    }
-
-    const best = this.getBestSet(planned);
-    const isPR = this.isNewRecord(exId, best.weight, best.reps);
-    const now = Date.now();
-    entry.sets = planned.map(s => ({ weight: s.weight, reps: s.reps, timestamp: now }));
-    this.saveActiveWorkout();
-    this.renderWorkoutScreen();
-
-    if (isPR) {
-      this.showToast(`Новый личный рекорд: ${best.weight} кг × ${best.reps} повт.!`);
-    } else {
-      this.showToast('Упражнение выполнено');
-    }
-  }
-
   // --- Завершение тренировки (Figma: Flow/03 Workout/FinishConfirm, Flow/04 Workout/Complete) ---
   pluralWord(n, forms) {
     const m10 = n % 10;
@@ -2133,7 +2066,6 @@ class GymApp {
 
     this.activeWorkout = null;
     this.saveActiveWorkout();
-    this.stopWorkoutClock();
 
     this.openHome();
     this.openWorkoutComplete(workout, records);
@@ -2207,7 +2139,6 @@ class GymApp {
       onOk: () => {
         this.activeWorkout = null;
         this.saveActiveWorkout();
-        this.stopWorkoutClock();
         this.showToast('Тренировка отменена');
         this.navigate('viewProgram');
       }
@@ -2219,8 +2150,6 @@ class GymApp {
     this.historyTab = tab;
     const titleEl = document.getElementById('historyTitle');
     if (titleEl) titleEl.innerText = tab === 'charts' ? 'График' : 'История';
-    const settingsBtn = document.getElementById('btnHistorySettings');
-    if (settingsBtn) settingsBtn.style.visibility = tab === 'charts' ? 'hidden' : 'visible';
     const contentLogs = document.getElementById('subtabContentLogs');
     const contentCharts = document.getElementById('subtabContentCharts');
 
