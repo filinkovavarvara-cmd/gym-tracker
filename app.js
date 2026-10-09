@@ -991,7 +991,6 @@ class GymApp {
           const workout = this.activeWorkout;
           this.fillUncheckedEntries(workout);
           const records = this.getWorkoutRecords(workout);
-          workout.endedAt = new Date().toISOString();
           this.workoutLogs.push(workout);
           this.saveWorkoutLogs();
           this.activeWorkout = null;
@@ -1479,18 +1478,21 @@ class GymApp {
 
     document.getElementById('exerciseHistoryTitle').innerText = name;
 
-    let maxWeight = 0;
-    sessions.forEach(s => s.sets.forEach(x => { if (x.weight > maxWeight) maxWeight = x.weight; }));
+    // Рекорд: больший вес, при равном весе — больше повторов
+    let best = null;
+    sessions.forEach(s => s.sets.forEach(x => { if (!best || this.compareSets(x, best) > 0) best = x; }));
+    const bestW = best ? Number(best.weight) || 0 : 0;
+    const bestR = best ? Number(best.reps) || 0 : 0;
 
     let html = '';
     if (sessions.length === 0) {
       html = '<div class="empty-state"><div class="empty-state-title">Пока нет записей</div><div class="empty-state-desc">Это упражнение ещё ни разу не выполнялось.</div></div>';
     } else {
-      html += `<div class="ex-history-summary">Тренировок: <strong>${sessions.length}</strong>${maxWeight > 0 ? ` · Рекорд веса: <strong>${maxWeight} кг</strong>` : ''}</div>`;
+      html += `<div class="ex-history-summary">Тренировок: <strong>${sessions.length}</strong>${bestW > 0 ? ` · Рекорд: <strong>${bestW} кг × ${bestR}</strong>` : ''}</div>`;
       sessions.forEach(s => {
         const dateStr = this.formatDateTime(s.date, !s.dateOnly && s.current);
         const setsHtml = '<div class="ex-history-sets">' + s.sets.map(x => {
-          const isMax = x.weight > 0 && x.weight === maxWeight;
+          const isMax = bestW > 0 && (Number(x.weight) || 0) === bestW && (Number(x.reps) || 0) === bestR;
           const label = x.weight > 0 ? `${x.weight} кг × ${x.reps}` : `${x.reps} повт.`;
           return `<span class="chip${isMax ? ' selected' : ''}">${label}${isMax ? '<img class="icon" src="./icons/fire.svg" alt="">' : ''}</span>`;
         }).join('') + '</div>';
@@ -1520,25 +1522,32 @@ class GymApp {
     return null;
   }
 
-  getHistoricalMaxWeight(exerciseId) {
-    let max = 0;
+  // Сравнение подходов: > 0, если a лучше b (сначала больший вес, при равном весе — больше повторов)
+  compareSets(a, b) {
+    const dw = (Number(a.weight) || 0) - (Number(b.weight) || 0);
+    if (dw !== 0) return dw;
+    return (Number(a.reps) || 0) - (Number(b.reps) || 0);
+  }
+
+  // Лучший подход упражнения за всю историю: { weight, reps } (нули, если записей нет)
+  getHistoricalBestSet(exerciseId) {
+    let best = { weight: 0, reps: 0 };
     this.workoutLogs.forEach(log => {
       const entry = log.entries && log.entries.find(e => e.exerciseId === exerciseId);
       if (entry && entry.sets) {
         entry.sets.forEach(s => {
-          if (s.weight > max) max = s.weight;
+          if (this.compareSets(s, best) > 0) best = { weight: Number(s.weight) || 0, reps: Number(s.reps) || 0 };
         });
       }
     });
-    return max;
+    return best;
   }
 
   isNewRecord(exerciseId, weight, reps) {
     if (!weight || weight <= 0) return false;
-    const histMax = this.getHistoricalMaxWeight(exerciseId);
-    if (histMax === 0) return false; // First time doesn't count as breaking a PR
-    if (weight > histMax) return true;
-    return false;
+    const hist = this.getHistoricalBestSet(exerciseId);
+    if (hist.weight === 0) return false; // First time doesn't count as breaking a PR
+    return this.compareSets({ weight, reps }, hist) > 0;
   }
 
   // Состояние полей карточки упражнения (вес, повторы, подходы); создаётся из цели, прошлой тренировки или записанных подходов
@@ -1639,11 +1648,12 @@ class GymApp {
         pastResultText = pastSets.map(s => this.formatSet(s)).join(', ');
       }
 
-      const histMax = this.getHistoricalMaxWeight(ex.id);
-      const isRecordPotential = histMax > 0 && this.getInputMaxWeight(cur) > histMax;
+      const histBest = this.getHistoricalBestSet(ex.id);
+      const inputBest = this.getInputBestSet(cur);
+      const isRecordPotential = histBest.weight > 0 && inputBest.weight > 0 && this.compareSets(inputBest, histBest) > 0;
       const target = ex.targetSets || 3;
 
-      const goal = `Цель: ${target} × ${esc(ex.targetReps || '8-10')}${histMax > 0 ? ` · Рекорд: ${histMax} кг` : ''}`;
+      const goal = `Цель: ${target} × ${esc(ex.targetReps || '8-10')}${histBest.weight > 0 ? ` · Рекорд: ${histBest.weight} кг × ${histBest.reps}` : ''}`;
       // Примечание показывается текстом; добавить или изменить его можно через меню «⋯»
       const subHtml = [
         `<div>${goal}</div>`,
@@ -1685,7 +1695,7 @@ class GymApp {
             </button>
           </div>
           ${cur.editing ? this.renderSetsEditorHtml(ex.id, cur) : ''}
-          <div id="livePR_${ex.id}" class="ex-live-pr">${isRecordPotential ? '<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд по весу!' : ''}</div>
+          <div id="livePR_${ex.id}" class="ex-live-pr">${isRecordPotential ? '<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд!' : ''}</div>
         </div>
       `;
     });
@@ -1749,13 +1759,14 @@ class GymApp {
     return sets.some(s => (Number(s.weight) || 0) !== w || (Number(s.reps) || 0) !== r);
   }
 
-  // Наибольший вес среди введённых подходов (для подсказки о рекорде)
+  // Лучший из введённых подходов: больший вес, при равном весе — больше повторов (для подсказки о рекорде)
   // Читает введённые значения; null = поле не заполнено
-  getInputMaxWeight(cur) {
+  getInputBestSet(cur) {
+    const toSet = (s) => ({ weight: Number(s.weight) || 0, reps: Number(s.reps) || 0 });
     if (cur.sets && cur.sets.length > 0) {
-      return cur.sets.reduce((m, s) => Math.max(m, Number(s.weight) || 0), 0);
+      return cur.sets.map(toSet).reduce((b, s) => (this.compareSets(s, b) > 0 ? s : b), { weight: 0, reps: 0 });
     }
-    return Number(cur.weight) || 0;
+    return toSet(cur);
   }
 
   // Короткая запись разных подходов: «60 кг × 10 (×2) · 65 кг × 8»
@@ -1974,10 +1985,10 @@ class GymApp {
     const cur = this.exerciseInputState[exId];
     const prEl = document.getElementById(`livePR_${exId}`);
     if (!cur || !prEl) return;
-    const histMax = this.getHistoricalMaxWeight(exId);
-    const maxW = this.getInputMaxWeight(cur);
-    if (histMax > 0 && maxW > histMax) {
-      prEl.innerHTML = `<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд! (${maxW} кг > ${histMax} кг)`;
+    const hist = this.getHistoricalBestSet(exId);
+    const inp = this.getInputBestSet(cur);
+    if (hist.weight > 0 && inp.weight > 0 && this.compareSets(inp, hist) > 0) {
+      prEl.innerHTML = `<img class="icon" src="./icons/fire.svg" alt="">Будет новый рекорд! (${inp.weight} кг × ${inp.reps} > ${hist.weight} кг × ${hist.reps})`;
     } else {
       prEl.innerHTML = '';
     }
@@ -2020,13 +2031,6 @@ class GymApp {
 
   formatInt(n) {
     return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00A0');
-  }
-
-  formatDuration(min) {
-    if (min < 60) return `${min} мин`;
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    return m ? `${h} ч ${m} мин` : `${h} ч`;
   }
 
   // Сводка по тренировке: выполненные упражнения, подходы и тоннаж (вес × повторы)
@@ -2116,8 +2120,7 @@ class GymApp {
     this.fillUncheckedEntries(workout);
     const records = this.getWorkoutRecords(workout);
 
-    // Время окончания сохраняем вместе с тренировкой (date = время начала, проставлено при старте)
-    workout.endedAt = new Date().toISOString();
+    // Сохраняется только время начала (date, проставлено при старте); время окончания и длительность не храним
     // Черновик ввода нужен только во время тренировки
     delete workout.inputs;
     this.workoutLogs.push(workout);
@@ -2133,24 +2136,20 @@ class GymApp {
   openWorkoutComplete(w, records) {
     const stats = this.getWorkoutStats(w);
     const start = new Date(w.date);
-    const end = new Date(w.endedAt);
     const hasStart = !isNaN(start.getTime());
-    const first = hasStart ? start : end;
+    const first = hasStart ? start : new Date();
     const pad2 = (n) => String(n).padStart(2, '0');
     const hm = (d) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
     const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
-    const minutes = hasStart ? Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000)) : 0;
-    const duration = minutes > 0 ? this.formatDuration(minutes) : '—';
     const set = (id, text) => { document.getElementById(id).textContent = text; };
 
     set('completeDate', `${first.getDate()} ${months[first.getMonth()]} ${first.getFullYear()} • ${this.weekdayName(first)}`);
-    set('completeTime', hasStart ? `${hm(start)}–${hm(end)} • ${duration}` : hm(end));
+    set('completeTime', `Начало в ${hm(first)}`);
     set('completeExercises', String(stats.exercises));
     set('completeExercisesLbl', this.pluralExercises(stats.exercises));
     set('completeSets', String(stats.sets));
     set('completeSetsLbl', this.pluralSets(stats.sets));
     set('completeTonnage', `${this.formatInt(stats.tonnage)} кг`);
-    set('completeDuration', duration);
 
     const box = document.getElementById('completeRecords');
     box.textContent = '';
@@ -2290,6 +2289,9 @@ class GymApp {
               </button>
             </div>
             <div class="card-menu" id="cardMenu-h_${log.id}" onclick="event.stopPropagation()">
+              <button class="card-menu-item" onclick="app.copyLog('${log.id}')">
+                <img class="icon icon-20" src="./icons/copy.svg" alt="">Копировать
+              </button>
               <button class="card-menu-item" onclick="app.openLogEdit('${log.id}')">
                 <img class="icon icon-20" src="./icons/pencil-simple.svg" alt="">Редактировать
               </button>
@@ -2309,7 +2311,7 @@ class GymApp {
   }
 
   // Подряд идущие одинаковые подходы схлопываются в одну строку слева: «60 кг x 3 по 10»
-  groupSetsHtml(sets) {
+  groupSetsLines(sets) {
     const groups = [];
     sets.forEach(s => {
       const last = groups[groups.length - 1];
@@ -2318,9 +2320,66 @@ class GymApp {
     });
     return groups.map(g => {
       const base = `${g.count} по ${g.reps}`;
-      const label = Number(g.weight) > 0 ? `${g.weight} кг x ${base}` : base;
-      return `<div class="history-set-row">${label}</div>`;
-    }).join('');
+      return Number(g.weight) > 0 ? `${g.weight} кг x ${base}` : base;
+    });
+  }
+
+  groupSetsHtml(sets) {
+    return this.groupSetsLines(sets).map(label => `<div class="history-set-row">${label}</div>`).join('');
+  }
+
+  // Текст тренировки для буфера обмена: название, дата, упражнения с подходами и заметки
+  buildLogText(log) {
+    const d = new Date(log.date);
+    const validDate = !isNaN(d.getTime());
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const lines = [this.getLogDayName(log)];
+    if (validDate) {
+      let head = `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} • ${this.weekdayName(d)}`;
+      if (!log.dateOnly) head += `, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+      lines.push(head);
+    }
+    (log.entries || []).forEach(e => {
+      if (!e.sets || e.sets.length === 0) return;
+      const logEx = Array.isArray(log.exercises) ? log.exercises.find(x => x.id === e.exerciseId) : null;
+      lines.push('');
+      lines.push(this.findExerciseName(e.exerciseId));
+      if (logEx && logEx.notes) lines.push(logEx.notes);
+      this.groupSetsLines(e.sets).forEach(l => lines.push(l));
+    });
+    if (log.note) {
+      lines.push('');
+      lines.push(log.note);
+    }
+    return lines.join('\n');
+  }
+
+  // Пункт меню «Копировать»: вся тренировка текстом в буфер обмена
+  async copyLog(logId) {
+    this.closeCardMenu();
+    const log = this.workoutLogs.find(l => l.id === logId);
+    if (!log) return;
+    const text = this.buildLogText(log);
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch (err) { ok = false; }
+    if (!ok) {
+      // Запасной вариант для браузеров без доступа к Clipboard API
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+      ta.remove();
+    }
+    this.showToast(ok ? 'Тренировка скопирована' : 'Не удалось скопировать');
   }
 
   // Переход из истории на вкладку аналитики с выбранным упражнением

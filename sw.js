@@ -1,4 +1,4 @@
-﻿const CACHE_NAME = 'gym-tracker-v39';
+﻿const CACHE_NAME = 'gym-tracker-v40';
 const ASSETS = [
   './',
   './index.html',
@@ -18,6 +18,7 @@ const ASSETS = [
   './icons/chart-bar.svg',
   './icons/check.svg',
   './icons/clock-counter-clockwise.svg',
+  './icons/copy.svg',
   './icons/dots-three.svg',
   './icons/faders-horizontal.svg',
   './icons/fire.svg',
