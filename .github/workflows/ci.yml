@@ -1,0 +1,73 @@
+name: GymTracker CI
+
+# Reusable: the manual deployment workflow calls this same job definition, so the
+# 260-test suite exists once. It never deploys and holds no Pages permissions.
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    # Local runs take ~10.5 min for 260 tests plus npm ci and Chrome install;
+    # leave headroom for a shared runner without masking real hangs.
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Check syntax and changed-line whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          for file in app.js import.js sw.js playwright.config.js tests/server.js .github/scripts/verify-release.cjs tests/*.spec.js; do
+            if ! node --check "$file" >/dev/null 2>&1; then
+              echo "JavaScript syntax check failed: $file"
+              exit 1
+            fi
+          done
+          # workflow_dispatch and new-branch pushes carry no usable base commit;
+          # fall back to the parent commit, or to an empty tree for a root commit.
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA=$(git rev-parse --verify --quiet "$HEAD_SHA^" || git hash-object -w -t tree /dev/null)
+          fi
+          if ! git diff --check "$BASE_SHA" "$HEAD_SHA" -- >/dev/null 2>&1; then
+            echo 'Whitespace check failed or the comparison base is unavailable. Run git diff --check locally for details.'
+            exit 1
+          fi
+
+      - name: Build and verify release package
+        run: node .github/scripts/verify-release.cjs "$RUNNER_TEMP/gymtracker-release"
+
+      - name: Install locked dependencies and Chrome
+        run: |
+          npm ci
+          npx --no-install playwright install --with-deps chrome
+
+      - name: Run application regressions in Chrome
+        run: npm test
+
+      - name: Upload verified package (no deploy)
+        # Reusable callers (the manual deploy workflow) run as workflow_dispatch,
+        # so also publish the package for a main-branch dispatch.
+        if: (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gymtracker-release
+          path: ${{ runner.temp }}/gymtracker-release/
+          include-hidden-files: true # The verified package contains .nojekyll.
+          if-no-files-found: error
+          retention-days: 7

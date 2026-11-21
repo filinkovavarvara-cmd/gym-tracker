@@ -1,0 +1,23 @@
+node_modules/
+test-results/
+playwright-report/
+
+# Personal exports; never publish these.
+/gym-backup*.json
+/*-backup.json
+/backups/
+
+# Local legacy deployment and diagnostic files (keep on disk).
+/_*.bat
+/_*.js
+/_*.log
+/_*.ps1
+/_*.txt
+
+# Local agent notes and design sources; not part of the published app.
+/HANDOFF.md
+/AGENT_START.md
+/skills/
+/Icon/
+/fix_labels.ps1
+/install-git.ps1

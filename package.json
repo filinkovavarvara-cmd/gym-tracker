@@ -1,0 +1,12 @@
+{
+  "name": "gym-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:ux01": "playwright test tests/workout-input.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2"
+  }
+}
