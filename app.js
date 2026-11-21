@@ -54,6 +54,18 @@ class GymApp {
 
   loadData() {
     try {
+      const snapshot = localStorage.getItem('gym_state_v1');
+      if (snapshot !== null) {
+        const state = JSON.parse(snapshot);
+        this.programs = state.programs;
+        this.currentProgramId = state.currentProgramId;
+        this.workoutLogs = state.workoutLogs;
+        this.exerciseNames = state.exerciseNames;
+        this.hiddenExercises = state.hiddenExercises;
+        this.activeWorkout = state.activeWorkout;
+        this.usesStateSnapshot = true;
+        return;
+      }
       const storedProgs = localStorage.getItem(STORAGE_KEYS.PROGRAMS);
       if (storedProgs) {
         this.programs = JSON.parse(storedProgs);
@@ -139,23 +151,28 @@ class GymApp {
 
 
   savePrograms() {
+    if (this.usesStateSnapshot) return this.saveStateSnapshot();
     localStorage.setItem(STORAGE_KEYS.PROGRAMS, JSON.stringify(this.programs));
     if (this.currentProgramId) localStorage.setItem(STORAGE_KEYS.CURRENT_PROGRAM_ID, this.currentProgramId);
   }
 
   saveWorkoutLogs() {
+    if (this.usesStateSnapshot) return this.saveStateSnapshot();
     localStorage.setItem(STORAGE_KEYS.WORKOUT_LOGS, JSON.stringify(this.workoutLogs));
   }
 
   saveExerciseNames() {
+    if (this.usesStateSnapshot) return this.saveStateSnapshot();
     localStorage.setItem(STORAGE_KEYS.EXERCISE_NAMES, JSON.stringify(this.exerciseNames));
   }
 
   saveHiddenExercises() {
+    if (this.usesStateSnapshot) return this.saveStateSnapshot();
     localStorage.setItem(STORAGE_KEYS.HIDDEN_EXERCISES, JSON.stringify(this.hiddenExercises));
   }
 
   saveActiveWorkout() {
+    if (this.usesStateSnapshot) return this.saveStateSnapshot();
     if (this.activeWorkout) {
       localStorage.setItem(STORAGE_KEYS.ACTIVE_WORKOUT, JSON.stringify(this.activeWorkout));
     } else {
@@ -167,8 +184,27 @@ class GymApp {
     return this.programs.find(p => p.id === this.currentProgramId) || this.programs[0] || null;
   }
 
-  navigate(viewId) {
+  getImportState() {
+    return {
+      programs: this.programs, currentProgramId: this.currentProgramId,
+      workoutLogs: this.workoutLogs, exerciseNames: this.exerciseNames,
+      hiddenExercises: this.hiddenExercises, activeWorkout: this.activeWorkout
+    };
+  }
+
+  saveStateSnapshot() {
+    localStorage.setItem('gym_state_v1', JSON.stringify(this.getImportState()));
+  }
+
+  getImportStorageFingerprint() {
+    return JSON.stringify(['gym_state_v1', ...Object.values(STORAGE_KEYS)]
+      .map(key => [key, localStorage.getItem(key)]));
+  }
+
+  navigate(viewId, options = {}) {
+    if (!options.editorApproved && this.guardEditorNavigation(() => this.navigate(viewId, { ...options, editorApproved: true }), viewId)) return false;
     // Во время тренировки можно свободно ходить по разделам: она остаётся активной и открывается карточкой в списке тренировок
+    if (options.tab) this.historyTab = options.tab;
     this.resetReorder();
     document.querySelectorAll('.view-screen').forEach(el => el.classList.remove('active'));
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -194,11 +230,122 @@ class GymApp {
     if (viewId === 'viewProgram') this.renderHome();
     if (viewId === 'viewHistory') this.renderHistory();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (options.tab) this.switchSubtab(options.tab);
+    return true;
+  }
+
+  currentEditor() {
+    const id = document.querySelector('.view-screen.active')?.id;
+    return id === 'viewDayEdit' ? 'day' : id === 'viewLogEdit' ? 'log' : null;
+  }
+
+  editorData(kind) {
+    const number = v => {
+      const text = String(v).trim().replace(',', '.');
+      return text !== '' && Number.isFinite(Number(text)) ? Number(text) : text;
+    };
+    if (kind === 'day') return this.dayDraft && {
+      name: this.dayDraft.name.trim(),
+      exercises: this.dayDraft.exercises.map(e => ({ id: e.id, name: e.name, w: number(e.w), r: number(e.r), c: number(e.c), n: (e.n || '').trim() }))
+    };
+    this.syncLogEditFromDom();
+    return this.logEdit && this.logEdit.items.map(e => ({ exerciseId: e.exerciseId, name: e.name,
+      sets: e.sets.map(s => ({ w: number(s.w), r: number(s.r) })) }));
+  }
+
+  beginEditor(kind) {
+    this.editorSession = { kind, original: GymImport.stable(this.editorData(kind)) };
+    history.pushState({ editor: kind }, '');
+  }
+
+  editorCanSave(kind) {
+    const data = this.editorData(kind);
+    const valid = (w, r) => typeof w === 'number' && w >= 0 && Number.isInteger(r) && r >= 1;
+    if (kind === 'day') return !!(data?.name && data.exercises.length && data.exercises.every(e =>
+      typeof e.w === 'number' && e.w >= 0 &&
+      (Number.isInteger(e.r) && e.r >= 1 || typeof e.r === 'string' && /^\d+\s*-\s*\d+$/.test(e.r) && e.r.split('-').every(n => Number(n) >= 1)) &&
+      Number.isInteger(e.c) && e.c >= 1 && e.c <= 50));
+    return !!data && data.every(e => e.sets.length >= 1 && e.sets.length <= 50 && e.sets.every(s => valid(s.w, s.r)));
+  }
+
+  guardEditorNavigation(proceed, target) {
+    const kind = this.currentEditor();
+    if (!kind || target === (kind === 'day' ? 'viewDayEdit' : 'viewLogEdit')) return false;
+    if (this.pendingEditorNavigation) return true;
+    if (!this.editorSession || GymImport.stable(this.editorData(kind)) === this.editorSession.original) {
+      this.editorSession = null;
+      return false;
+    }
+    this.pendingEditorNavigation = proceed;
+    this.openConfirmSheet({
+      title: 'Сохранить изменения?', text: 'В редакторе есть несохранённые изменения.',
+      cancelLabel: 'Продолжить редактирование', okLabel: 'Не сохранять',
+      onCancel: () => { this.pendingEditorNavigation = null; },
+      onOk: () => {
+        const next = this.pendingEditorNavigation;
+        this.pendingEditorNavigation = null;
+        if (kind === 'day') this.dayDraft = null; else this.logEdit = null;
+        this.editorSession = null;
+        if (next) next();
+      }
+    });
+    const extra = document.getElementById('confirmSheetSave');
+    extra.hidden = !this.editorCanSave(kind);
+    document.getElementById('confirmSheet').classList.add('editor-guard');
+    this.confirmSave = () => {
+      const next = this.pendingEditorNavigation;
+      this.pendingEditorNavigation = null;
+      this.closeConfirmSheet();
+      this.saveEditorTransaction(kind, next);
+    };
+    return true;
+  }
+
+  saveEditorTransaction(kind, afterSave) {
+    if (this.editorSaving) return false;
+    if (!this.editorCanSave(kind)) {
+      this.showToast('Проверьте название, упражнения и значения подходов перед сохранением.');
+      return false;
+    }
+    this.editorSaving = true;
+    try {
+      // Run existing validation/mapping on a detached copy; no writes or navigation before commit.
+      const worker = Object.assign(Object.create(GymApp.prototype), this,
+        JSON.parse(JSON.stringify(this.getImportState())));
+      worker.dayDraft = this.dayDraft && JSON.parse(JSON.stringify(this.dayDraft));
+      worker.logEdit = this.logEdit && JSON.parse(JSON.stringify(this.logEdit));
+      for (const method of ['savePrograms', 'saveWorkoutLogs', 'saveExerciseNames', 'saveHiddenExercises', 'saveActiveWorkout']) worker[method] = () => {};
+      worker.navigate = () => true;
+      worker.showToast = message => { worker.savedMessage = message; };
+      if (kind === 'day') worker.saveDayEditDraft(); else worker.saveLogEditDraft();
+      if (kind === 'day' ? worker.dayDraft !== null : worker.logEdit !== null) return false;
+      localStorage.setItem('gym_state_v1', JSON.stringify(worker.getImportState()));
+      Object.assign(this, worker.getImportState());
+      this.usesStateSnapshot = true;
+      if (kind === 'day') this.dayDraft = null; else this.logEdit = null;
+      this.editorSession = null;
+      if (afterSave) afterSave();
+      else this.navigate(kind === 'day' ? 'viewProgram' : 'viewHistory', { editorApproved: true });
+      this.showToast(worker.savedMessage || 'Изменения сохранены');
+      return true;
+    } catch (error) {
+      console.warn('Editor save failed:', error);
+      this.showToast('Не удалось сохранить: хранилище недоступно или заполнено. Изменения остались в редакторе.');
+      return false;
+    } finally {
+      this.editorSaving = false;
+    }
   }
 
   // Системная кнопка «назад» во время тренировки не уводит с экрана: вместо этого спрашиваем о завершении
   initWorkoutBackGuard() {
     window.addEventListener('popstate', () => {
+      const editor = this.currentEditor();
+      if (editor) {
+        history.pushState({ editor }, '');
+        this.navigate(editor === 'day' ? 'viewProgram' : 'viewHistory');
+        return;
+      }
       const view = document.getElementById('viewWorkout');
       if (this.activeWorkout && view && view.classList.contains('active')) {
         history.pushState({ workout: true }, '');
@@ -210,15 +357,11 @@ class GymApp {
 
   // Кнопки нижней навигации: «Главная» и «Аналитика» пока показывают существующий экран истории
   openHome() {
-    this.historyTab = 'logs';
-    this.navigate('viewHistory');
-    this.switchSubtab('logs');
+    this.navigate('viewHistory', { tab: 'logs' });
   }
 
   openAnalytics() {
-    this.historyTab = 'charts';
-    this.navigate('viewHistory');
-    this.switchSubtab('charts');
+    this.navigate('viewHistory', { tab: 'charts' });
   }
 
   showToast(msg) {
@@ -351,6 +494,7 @@ class GymApp {
       text: 'Тренировочный день и все его упражнения будут удалены.',
       okLabel: 'Удалить',
       onOk: () => {
+        this.preserveHistoricalExerciseNames();
         const prog = this.getCurrentProgram();
         prog.days = prog.days.filter(d => d.id !== dayId);
         this.savePrograms();
@@ -361,7 +505,8 @@ class GymApp {
   }
 
   // --- СОЗДАНИЕ И РЕДАКТИРОВАНИЕ ТРЕНИРОВКИ (Figma: Workout/Create, Workout/Edit) ---
-  openDayEdit(dayId) {
+  openDayEdit(dayId, approved = false) {
+    if (!approved && this.guardEditorNavigation(() => this.openDayEdit(dayId, true), 'replace-editor')) return;
     this.closeCardMenu();
     const prog = this.getCurrentProgram();
     const day = dayId && prog ? prog.days.find(d => d.id === dayId) : null;
@@ -385,6 +530,7 @@ class GymApp {
     this.updateDayEditTitle();
     this.renderDayEdit();
     this.navigate('viewDayEdit');
+    this.beginEditor('day');
   }
 
   renderDayEdit() {
@@ -776,6 +922,7 @@ class GymApp {
     const text = document.getElementById('noteText').value.trim();
     const ex = this.getActiveExercises().find(e => e.id === exId);
     if (ex) {
+      if (ex.notes !== text) ex.workoutEdited = true;
       ex.notes = text;
       this.saveActiveWorkout();
       const prog = this.getCurrentProgram();
@@ -882,6 +1029,10 @@ class GymApp {
   }
 
   saveDayEdit() {
+    return this.saveEditorTransaction('day');
+  }
+
+  saveDayEditDraft() {
     const st = this.dayDraft;
     if (!st) return;
     const name = st.name.trim();
@@ -906,16 +1057,18 @@ class GymApp {
       this.programs.push(prog);
       this.currentProgramId = prog.id;
     }
+    this.preserveHistoricalExerciseNames();
     const day = st.dayId ? prog.days.find(d => d.id === st.dayId) : null;
     const prev = day ? day.exercises : [];
     const exercises = st.exercises.map((it, i) => {
       const { id, name: exName } = this.resolvePickerItem({ id: it.id, name: it.name }, i);
       const old = prev.find(e => e.id === id);
       return {
+        ...old,
         id,
         name: exName,
         targetSets: parsed[i].count,
-        targetReps: String(parsed[i].reps),
+        targetReps: old && it.r === String(old.targetReps) ? old.targetReps : String(parsed[i].reps),
         targetWeight: parsed[i].weight,
         notes: (it.n || '').trim()
       };
@@ -942,6 +1095,7 @@ class GymApp {
     if (!this.activeWorkout) return;
     const wex = this.getActiveExercises().find(e => e.id === exId);
     if (wex) {
+      if (wex.targetSets !== sets || wex.targetReps !== reps || wex.notes !== notes) wex.workoutEdited = true;
       wex.targetSets = sets;
       wex.targetReps = reps;
       wex.notes = notes;
@@ -988,15 +1142,7 @@ class GymApp {
         okLabel: 'Завершить',
         cancelLabel: 'Отмена',
         onOk: () => {
-          const workout = this.activeWorkout;
-          this.fillUncheckedEntries(workout);
-          const records = this.getWorkoutRecords(workout);
-          this.workoutLogs.push(workout);
-          this.saveWorkoutLogs();
-          this.activeWorkout = null;
-          this.saveActiveWorkout();
-          this.openWorkoutComplete(workout, records);
-          this.startWorkout(dayId);
+          if (this.commitFinishWorkout()) this.startWorkout(dayId);
         },
         onCancel: () => this.resumeActiveWorkout()
       });
@@ -1026,6 +1172,9 @@ class GymApp {
     }
 
     if (!this.activeWorkout || this.activeWorkout.dayId !== dayId) {
+      // Новый сеанс не наследует ввод завершённой или отменённой тренировки.
+      // Прошлые результаты доступны отдельно через getInputHints(), а не как введённые значения.
+      this.exerciseInputState = {};
       // Дата и время начала фиксируются автоматически
       this.activeWorkout = {
         id: 'workout-' + Date.now(),
@@ -1368,17 +1517,22 @@ class GymApp {
   }
 
   replaceWorkoutExercise(oldId, item) {
+    if (this.replacementPending) return;
     const exercises = this.getActiveExercises();
     if (!item || !exercises.some(e => e.id === oldId)) return;
 
+    const workoutId = this.activeWorkout.id;
     const run = () => {
-      if (!this.activeWorkout) return;
-      const list = this.getActiveExercises();
+      if (!this.activeWorkout || this.activeWorkout.id !== workoutId) return;
+      const next = JSON.parse(JSON.stringify(this.activeWorkout));
+      const list = next.exercises;
       const i = list.findIndex(e => e.id === oldId);
       if (i === -1) return;
       const oldEx = list[i];
-      const { id: newId, name } = this.resolvePickerItem(item);
-      if (newId !== oldId && list.some(e => e.id === newId)) {
+      // Resolving a custom replacement must not mutate the exercise dictionary.
+      const newId = item.id || this.findExerciseIdByName(item.name) || 'ex-' + Date.now();
+      const name = item.name;
+      if (newId === oldId || list.some(e => e.id === newId)) {
         this.showToast('Это упражнение уже есть в тренировке');
         return;
       }
@@ -1389,30 +1543,57 @@ class GymApp {
         targetReps: oldEx.targetReps,
         notes: oldEx.notes || ''
       };
-      this.activeWorkout.entries = this.activeWorkout.entries.filter(e => e.exerciseId !== oldId);
-      this.activeWorkout.entries.push({ exerciseId: newId, sets: [] });
+      next.entries = next.entries.filter(e => e.exerciseId !== oldId && e.exerciseId !== newId);
+      next.entries.push({ exerciseId: newId, sets: [] });
+      if (next.inputs) { delete next.inputs[oldId]; delete next.inputs[newId]; }
+      try {
+        if (this.usesStateSnapshot) {
+          localStorage.setItem('gym_state_v1', JSON.stringify({ ...this.getImportState(), activeWorkout: next }));
+        } else {
+          localStorage.setItem(STORAGE_KEYS.ACTIVE_WORKOUT, JSON.stringify(next));
+        }
+      } catch (error) {
+        console.warn('Exercise replacement failed:', error);
+        this.closeExercisePicker();
+        this.showToast('Не удалось заменить упражнение. Все введённые данные сохранены. Попробуйте снова.');
+        return;
+      }
+      this.activeWorkout = next;
       this.clearExerciseInput(oldId);
       this.clearExerciseInput(newId);
-      this.saveActiveWorkout();
       this.closeExercisePicker();
       this.renderWorkoutScreen();
       this.showToast(`Заменено: ${oldEx.name} → ${name}`);
     };
 
-    const oldEntry = this.activeWorkout.entries.find(e => e.exerciseId === oldId);
-    if (oldEntry && oldEntry.sets.length > 0) {
+    if (this.hasWorkoutExerciseInput(oldId)) {
       // Подтверждение показываем вместо выбора, а не поверх него; при отмене выбор возвращается
       this.hidePicker();
+      this.replacementPending = true;
       this.openConfirmSheet({
         title: 'Заменить упражнение?',
-        text: 'У упражнения уже записаны подходы. При замене они будут удалены.',
+        text: `В «${exercises.find(e => e.id === oldId).name}» есть введённые данные. Замена удалит его веса, повторы и подходы. Цели и примечание будут перенесены. Другие упражнения не изменятся.`,
         okLabel: 'Заменить',
-        onOk: run,
-        onCancel: () => this.showPicker()
+        onOk: () => { this.replacementPending = false; run(); },
+        onCancel: () => { this.replacementPending = false; this.closeExercisePicker(); }
       });
     } else {
       run();
     }
+  }
+
+  hasWorkoutExerciseInput(exId) {
+    const workout = this.activeWorkout;
+    if (!workout) return false;
+    if ((workout.entries || []).some(e => e.exerciseId === exId && e.sets?.length)) return true;
+    const entered = value => value !== null && value !== undefined && value !== '';
+    const hasInput = state => !!state && (['weight', 'reps', 'count'].some(k => entered(state[k])) ||
+      state.sets?.some(s => entered(s.weight) || entered(s.reps)));
+    if (hasInput(this.exerciseInputState[exId]) || hasInput(workout.inputs?.[exId])) return true;
+    const ex = workout.exercises.find(e => e.id === exId);
+    const template = this.programs.flatMap(p => p.days).find(d => d.id === workout.dayId)?.exercises.find(e => e.id === exId);
+    return !!ex && (ex.workoutEdited === true || !!ex.notes && ex.notes !== (template?.notes || '') ||
+      !!template && (ex.targetSets !== template.targetSets || ex.targetReps !== template.targetReps));
   }
 
   // --- REMOVE EXERCISE DURING WORKOUT ---
@@ -1453,10 +1634,8 @@ class GymApp {
   // --- EXERCISE HISTORY (список всех выполнений упражнения) ---
   openExerciseHistory(exId) {
     const name = this.findExerciseName(exId);
-    const norm = (n) => String(n || '').trim().toLowerCase();
-    // Одно и то же упражнение может иметь разные id (замены, импорт): сопоставляем ещё и по названию
+    // ID is the identity. Equal display names do not imply equal exercises.
     const ids = new Set([exId]);
-    this.getAllExercisesList().forEach(e => { if (norm(e.name) === norm(name)) ids.add(e.id); });
 
     const sessions = [];
     this.workoutLogs.forEach(log => {
@@ -1550,7 +1729,8 @@ class GymApp {
     return this.compareSets({ weight, reps }, hist) > 0;
   }
 
-  // Состояние полей карточки упражнения (вес, повторы, подходы); создаётся из цели, прошлой тренировки или записанных подходов
+  // Ввод только текущей тренировки: её черновик или уже записанные в ней подходы.
+  // Цели и прошлые результаты используются отдельно, только как подсказки.
   // Поля пустые (null): пока пользователь ничего не ввёл, в рамках светло-серым показывается подсказка (hint)
   ensureExerciseInputState(ex, entry) {
     if (!this.exerciseInputState[ex.id]) {
@@ -1805,7 +1985,8 @@ class GymApp {
     const empty = value == null;
     const text = `${empty ? hint : value} ${unit}`;
     const aria = empty ? `${label}: не заполнено, например ${text}` : `${label}: ${text}`;
-    return `<button type="button" class="metric-pill metric-btn${empty ? ' is-empty' : ''}" onclick="app.openNumpad('${exId}', '${field}', ${idx})" aria-label="${this.escapeHtml(aria)}">${this.escapeHtml(text)}</button>`;
+    const id = this.escapeHtml(`numpad-trigger-${exId}-${field}-${idx}`);
+    return `<button type="button" id="${id}" class="metric-pill metric-btn${empty ? ' is-empty' : ''}" onclick="app.openNumpad('${exId}', '${field}', ${idx}, this)" aria-label="${this.escapeHtml(aria)}">${this.escapeHtml(text)}</button>`;
   }
 
   // Редактор «каждый подход отдельно»
@@ -1855,7 +2036,7 @@ class GymApp {
   }
 
   // --- Цифровая шторка ввода: нажали на рамку «50 кг» — снизу открывается большое число, − / + и клавиатура ---
-  openNumpad(exId, field, index) {
+  openNumpad(exId, field, index, trigger) {
     const cur = this.exerciseInputState[exId];
     if (!cur) return;
     const sets = index != null ? cur.sets : null;
@@ -1866,11 +2047,50 @@ class GymApp {
     this.numpad = { exId, field, index, hint, text: value == null ? '' : String(Number(value) || 0) };
     this.renderNumpad();
     this.openModal('numpadSheet');
+    const backdrop = document.getElementById('numpadSheet');
+    const dialog = backdrop.querySelector('[role="dialog"]');
+    if (!this.numpadFocus) {
+      const background = Array.from(document.body.children).filter(el =>
+        el !== backdrop && el instanceof HTMLElement && el.tagName !== 'SCRIPT' && !el.inert);
+      this.numpadFocus = { trigger, workoutId: this.activeWorkout?.id, background };
+      background.forEach(el => { el.inert = true; });
+    }
+    (this.getNumpadTabStops(dialog)[0] || dialog).focus({ preventScroll: true });
   }
 
   closeNumpad() {
     this.numpad = null;
     this.closeModal('numpadSheet');
+    const focus = this.numpadFocus;
+    if (!focus) return;
+    this.numpadFocus = null;
+    focus.background.forEach(el => { el.inert = false; });
+
+    // Numeric input rerenders the workout cards; the same metric may now be a new button.
+    const trigger = focus.trigger;
+    const replacement = trigger && !trigger.isConnected && this.activeWorkout?.id === focus.workoutId
+      ? document.getElementById(trigger.id) : null;
+    for (const target of [trigger, replacement, document.getElementById('workoutScreenDayName'), document.getElementById('navItemProgram')]) {
+      if (!target?.isConnected) continue;
+      target.focus({ preventScroll: true });
+      if (document.activeElement === target) break;
+    }
+  }
+
+  getNumpadTabStops(dialog) {
+    return Array.from(dialog.querySelectorAll('button:enabled')).filter(button =>
+      button.tabIndex >= 0 && button.getClientRects().length && getComputedStyle(button).visibility === 'visible');
+  }
+
+  trapNumpadFocus(event) {
+    if (event.key !== 'Tab' || !this.numpadFocus) return;
+    const dialog = event.currentTarget.querySelector('[role="dialog"]');
+    const buttons = this.getNumpadTabStops(dialog);
+    const edge = event.shiftKey ? buttons[0] : buttons[buttons.length - 1];
+    if (document.activeElement !== edge && buttons.includes(document.activeElement)) return;
+    event.preventDefault();
+    const target = event.shiftKey ? buttons[buttons.length - 1] : buttons[0];
+    (target || dialog).focus({ preventScroll: true });
   }
 
   getNumpadLimit(field) {
@@ -2115,22 +2335,39 @@ class GymApp {
   }
 
   commitFinishWorkout() {
-    if (!this.activeWorkout) return;
-    const workout = this.activeWorkout;
-    this.fillUncheckedEntries(workout);
-    const records = this.getWorkoutRecords(workout);
-
-    // Сохраняется только время начала (date, проставлено при старте); время окончания и длительность не храним
-    // Черновик ввода нужен только во время тренировки
-    delete workout.inputs;
-    this.workoutLogs.push(workout);
-    this.saveWorkoutLogs();
-
-    this.activeWorkout = null;
-    this.saveActiveWorkout();
-
+    if (!this.activeWorkout || this.completingWorkout) return false;
+    this.completingWorkout = true;
+    let workout, records;
+    try {
+      // Completion is staged: even input initialization must not mutate the live draft.
+      const next = JSON.parse(JSON.stringify(this.getImportState()));
+      const worker = Object.assign(Object.create(GymApp.prototype), this, next, {
+        exerciseInputState: JSON.parse(JSON.stringify(this.exerciseInputState))
+      });
+      const existing = next.workoutLogs.find(log => log.id === next.activeWorkout.id);
+      workout = existing || worker.fillUncheckedEntries(next.activeWorkout);
+      records = existing ? [] : worker.getWorkoutRecords(workout);
+      if (!existing) {
+        delete workout.inputs;
+        next.workoutLogs.push(workout);
+      }
+      next.activeWorkout = null;
+      // One atomic publication for both storage modes. Legacy keys remain untouched;
+      // loadData already treats this snapshot as authoritative after migration.
+      localStorage.setItem('gym_state_v1', JSON.stringify(next));
+      Object.assign(this, next);
+      this.usesStateSnapshot = true;
+      this.exerciseInputState = {};
+    } catch (error) {
+      console.warn('Workout completion failed:', error);
+      this.showToast('Не удалось сохранить тренировку: хранилище недоступно или заполнено. Все введённые данные остались в текущей тренировке. Попробуйте снова.');
+      return false;
+    } finally {
+      this.completingWorkout = false;
+    }
     this.openHome();
     this.openWorkoutComplete(workout, records);
+    return true;
   }
 
   openWorkoutComplete(w, records) {
@@ -2197,6 +2434,7 @@ class GymApp {
       cancelLabel: 'Продолжить',
       onOk: () => {
         this.activeWorkout = null;
+        this.exerciseInputState = {};
         this.saveActiveWorkout();
         this.showToast('Тренировка отменена');
         this.navigate('viewProgram');
@@ -2255,7 +2493,7 @@ class GymApp {
       if (log.entries) {
         log.entries.forEach(e => {
           if (e.sets && e.sets.length > 0) {
-            const exName = this.findExerciseName(e.exerciseId);
+            const exName = this.getHistoricalExerciseName(log, e.exerciseId);
             const logEx = Array.isArray(log.exercises) ? log.exercises.find(x => x.id === e.exerciseId) : null;
             const exNote = logEx && logEx.notes ? `<div class="history-exercise-note">${this.escapeHtml(logEx.notes)}</div>` : '';
 
@@ -2343,7 +2581,7 @@ class GymApp {
       if (!e.sets || e.sets.length === 0) return;
       const logEx = Array.isArray(log.exercises) ? log.exercises.find(x => x.id === e.exerciseId) : null;
       lines.push('');
-      lines.push(this.findExerciseName(e.exerciseId));
+      lines.push(this.getHistoricalExerciseName(log, e.exerciseId));
       if (logEx && logEx.notes) lines.push(logEx.notes);
       this.groupSetsLines(e.sets).forEach(l => lines.push(l));
     });
@@ -2390,12 +2628,16 @@ class GymApp {
 
   // --- Кастомный выбор упражнения для графика (вместо системного select) ---
   getChartExercises() {
-    // В аналитике только упражнения, которые реально выполнялись (есть в истории с подходами)
-    const done = new Set();
-    this.workoutLogs.forEach(log => (log.entries || []).forEach(en => {
-      if (en.sets && en.sets.length > 0) done.add(en.exerciseId);
-    }));
-    return this.getAllExercisesList().filter(e => done.has(e.id));
+    const catalog = new Map();
+    // Discover from completed records, not from mutable templates. De-duplicate by ID only.
+    [...this.workoutLogs].sort((a, b) => new Date(b.date) - new Date(a.date)).forEach(log => {
+      (log.entries || []).forEach(en => {
+        if (en.sets && en.sets.length && !catalog.has(en.exerciseId)) {
+          catalog.set(en.exerciseId, { id: en.exerciseId, name: this.getHistoricalExerciseName(log, en.exerciseId) });
+        }
+      });
+    });
+    return [...catalog.values()];
   }
 
   openChartPicker() {
@@ -2468,6 +2710,9 @@ class GymApp {
 
   // --- Нижняя шторка подтверждения (Figma: BottomSheet/ConfirmDelete) ---
   openConfirmSheet({ title, text, okLabel, cancelLabel = 'Отмена', stats, onOk, onCancel }) {
+    this.confirmSave = null;
+    document.getElementById('confirmSheetSave').hidden = true;
+    document.getElementById('confirmSheet').classList.remove('editor-guard');
     this.confirmAction = onOk;
     this.confirmCancel = onCancel || null;
     document.getElementById('confirmSheetCancel').textContent = cancelLabel;
@@ -2501,6 +2746,12 @@ class GymApp {
     document.getElementById('confirmSheet').classList.remove('open');
   }
 
+  runConfirmSave() {
+    const action = this.confirmSave;
+    this.confirmSave = null;
+    if (action) action();
+  }
+
   runConfirmSheet() {
     const action = this.confirmAction;
     this.closeConfirmSheet();
@@ -2532,30 +2783,27 @@ class GymApp {
     }, sets[0]);
   }
 
-  openLogEdit(logId) {
+  openLogEdit(logId, approved = false) {
+    if (!approved && this.guardEditorNavigation(() => this.openLogEdit(logId, true), 'replace-editor')) return;
     this.closeCardMenu();
     const log = this.workoutLogs.find(l => l.id === logId);
     if (!log) return;
     const items = [];
     (log.entries || []).forEach((entry, entryIndex) => {
       if (!entry.sets || entry.sets.length === 0) return;
-      const best = this.getBestSet(entry.sets);
-      const weight = Number(best.weight) || 0;
-      const reps = Number(best.reps) || 0;
-      const count = entry.sets.length;
       items.push({
         entryIndex,
         exerciseId: entry.exerciseId,
-        name: this.findExerciseName(entry.exerciseId),
-        w: String(weight),
-        r: String(reps),
-        c: String(count),
-        orig: { weight, reps, count }
+        name: this.getHistoricalExerciseName(log, entry.exerciseId),
+        sets: entry.sets.map((s, sourceIndex) => ({
+          sourceIndex, w: String(s.weight), r: String(s.reps)
+        }))
       });
     });
     this.logEdit = { logId, title: this.getLogDayName(log), items };
     this.renderLogEdit();
     this.navigate('viewLogEdit');
+    this.beginEditor('log');
   }
 
   renderLogEdit() {
@@ -2582,10 +2830,17 @@ class GymApp {
             <img class="icon" src="./icons/trash.svg" alt="">
           </button>`}
         </div>
-        <div class="metric-group">
-          ${this.metricItemHtml(`data-idx="${i}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(it.w)}" oninput="app.onLogEditInput(this)" aria-label="Вес, кг"`, '<span class="metric-unit">кг</span>')}
-          ${this.metricItemHtml(`data-idx="${i}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.r)}" oninput="app.onLogEditInput(this)" aria-label="Повторы"`, '<span class="metric-unit">раз</span>')}
-          ${this.metricItemHtml(`data-idx="${i}" data-field="c" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(it.c)}" oninput="app.onLogEditInput(this)" aria-label="Подходы"`, `<span class="metric-unit metric-sets-label">${this.pluralSets(parseInt(it.c, 10) || 0)}</span>`)}
+        <div class="log-sets">
+          ${it.sets.map((s, j) => `
+            <div class="set-row log-set-row">
+              <span class="set-num">${j + 1}</span>
+              ${this.metricItemHtml(`data-idx="${i}" data-set="${j}" data-field="w" inputmode="decimal" autocomplete="off" value="${this.escapeHtml(s.w)}" oninput="app.onLogEditInput(this)" aria-label="Подход ${j + 1}, вес, кг"`, '<span class="metric-unit">кг</span>')}
+              ${this.metricItemHtml(`data-idx="${i}" data-set="${j}" data-field="r" inputmode="numeric" autocomplete="off" value="${this.escapeHtml(s.r)}" oninput="app.onLogEditInput(this)" aria-label="Подход ${j + 1}, повторы"`, '<span class="metric-unit">раз</span>')}
+              <button class="set-remove" onclick="app.removeLogSet(${i}, ${j})" title="Удалить подход" aria-label="Удалить подход ${j + 1}">
+                <img class="icon icon-20" src="./icons/x.svg" alt="">
+              </button>
+            </div>`).join('')}
+          <button class="btn-pill set-add" onclick="app.addLogSet(${i})"><img class="icon icon-20" src="./icons/plus.svg" alt="">Добавить подход</button>
         </div>
       </div>
     `).join('');
@@ -2599,10 +2854,9 @@ class GymApp {
 
   onLogEditInput(inp) {
     this.fitMetricInput(inp);
-    if (inp.dataset.field === 'c') {
-      const label = inp.closest('.metric-item').querySelector('.metric-sets-label');
-      if (label) label.textContent = this.pluralSets(parseInt(inp.value, 10) || 0);
-    }
+    const it = this.logEdit && this.logEdit.items[Number(inp.dataset.idx)];
+    const set = it && it.sets[Number(inp.dataset.set)];
+    if (set) set[inp.dataset.field] = inp.value;
   }
 
   // Забираем значения полей в черновик (до перерисовки и сохранения)
@@ -2611,8 +2865,34 @@ class GymApp {
     if (!st) return;
     document.querySelectorAll('#logEditList .metric-input').forEach(inp => {
       const it = st.items[parseInt(inp.dataset.idx, 10)];
-      if (it) it[inp.dataset.field] = inp.value;
+      const set = it && it.sets[Number(inp.dataset.set)];
+      if (set) set[inp.dataset.field] = inp.value;
     });
+  }
+
+  addLogSet(index) {
+    this.syncLogEditFromDom();
+    const it = this.logEdit && this.logEdit.items[index];
+    if (!it) return;
+    if (it.sets.length >= 50) {
+      this.showToast('Не больше 50 подходов');
+      return;
+    }
+    const last = it.sets[it.sets.length - 1];
+    it.sets.push({ sourceIndex: null, w: last ? last.w : '0', r: last ? last.r : '10' });
+    this.renderLogEdit();
+  }
+
+  removeLogSet(index, setIndex) {
+    this.syncLogEditFromDom();
+    const it = this.logEdit && this.logEdit.items[index];
+    if (!it || !it.sets[setIndex]) return;
+    if (it.sets.length <= 1) {
+      this.showToast('Должен остаться хотя бы один подход');
+      return;
+    }
+    it.sets.splice(setIndex, 1);
+    this.renderLogEdit();
   }
 
   askRemoveLogExercise(index) {
@@ -2638,17 +2918,17 @@ class GymApp {
     this.syncLogEditFromDom();
     let added = 0;
     items.forEach((item, n) => {
-      const { id, name } = this.resolvePickerItem(item, n);
+      // A new exercise belongs to the editor draft until Save succeeds.
+      const id = item.id || this.findExerciseIdByName(item.name) || 'ex-' + (Date.now() + n);
+      const name = item.name;
       if (st.items.some(it => it.exerciseId === id)) return;
       const last = this.getLastWorkoutSets(id);
       st.items.push({
         entryIndex: null,
         exerciseId: id,
         name,
-        w: String(last && last[0] ? last[0].weight : 0),
-        r: String(last && last[0] ? last[0].reps : 10),
-        c: String(last && last.length ? last.length : 3),
-        orig: null
+        sets: (last && last.length ? last : Array.from({ length: 3 }, () => ({ weight: 0, reps: 10 })))
+          .map(s => ({ sourceIndex: null, w: String(s.weight), r: String(s.reps) }))
       });
       added++;
     });
@@ -2658,6 +2938,10 @@ class GymApp {
   }
 
   saveLogEdit() {
+    return this.saveEditorTransaction('log');
+  }
+
+  saveLogEditDraft() {
     const st = this.logEdit;
     if (!st) return;
     this.syncLogEditFromDom();
@@ -2665,53 +2949,58 @@ class GymApp {
     if (!log) { this.navigate('viewHistory'); return; }
 
     // Сначала проверяем все значения, чтобы не сохранить наполовину
+    const entries = log.entries || [];
+    const now = Date.now();
     const parsed = new Map();
-    const added = [];
     for (const it of st.items) {
-      const weight = parseFloat(String(it.w).replace(',', '.'));
-      const reps = parseInt(it.r, 10);
-      const count = parseInt(it.c, 10);
-      if (!(weight >= 0) || !(reps >= 1) || !(count >= 1) || count > 50) {
-        this.showToast(`Проверьте значения: ${it.name}`);
+      if (!it.sets.length || it.sets.length > 50) {
+        this.showToast(`Проверьте число подходов: ${it.name}`);
         return;
       }
-      if (it.entryIndex == null) added.push({ exerciseId: it.exerciseId, name: it.name, weight, reps, count });
-      else parsed.set(it.entryIndex, { weight, reps, count, orig: it.orig });
+      const sets = [];
+      for (const [index, s] of it.sets.entries()) {
+        const weight = Number(String(s.w).trim().replace(',', '.'));
+        const reps = Number(String(s.r).trim());
+        if (!String(s.w).trim() || !String(s.r).trim() || !Number.isFinite(weight) || weight < 0 ||
+            !Number.isInteger(reps) || reps < 1) {
+          this.showToast(`Проверьте значения: ${it.name}, подход ${index + 1}`);
+          return;
+        }
+        const entry = it.entryIndex == null ? null : entries[it.entryIndex];
+        const source = entry && s.sourceIndex != null ? entry.sets[s.sourceIndex] : null;
+        // Неправленные подходы сохраняем без преобразований, правки — только в выбранном подходе.
+        sets.push(source
+          ? (weight === Number(source.weight) && reps === Number(source.reps)
+            ? source : { ...source, weight, reps })
+          : { weight, reps, timestamp: now });
+      }
+      parsed.set(it, sets);
     }
 
-    const now = Date.now();
-    const entries = log.entries || [];
     const used = new Set();
     const result = [];
 
     // Записи собираются в том порядке, в котором карточки стоят на экране
     st.items.forEach(it => {
-      const p = parsed.get(it.entryIndex);
+      const sets = parsed.get(it);
       if (it.entryIndex != null) {
         const entry = entries[it.entryIndex];
-        if (!entry || !p) return;
+        if (!entry || !sets) return;
         used.add(it.entryIndex);
-        const unchanged = p.weight === p.orig.weight && p.reps === p.orig.reps && p.count === p.orig.count;
-        if (unchanged) { result.push(entry); return; } // не трогаем подходы, чтобы не потерять разные веса и повторы
-        const ts = entry.sets[0].timestamp || now;
-        result.push(Object.assign({}, entry, {
-          sets: Array.from({ length: p.count }, () => ({ weight: p.weight, reps: p.reps, timestamp: ts }))
-        }));
+        result.push({ ...entry, sets });
         return;
       }
       // Новое упражнение: если в записи уже есть пустая отметка этого упражнения, заполняем её, иначе добавляем новую
-      const a = added.find(x => x.exerciseId === it.exerciseId);
-      if (!a) return;
-      const sets = Array.from({ length: a.count }, () => ({ weight: a.weight, reps: a.reps, timestamp: now }));
-      const emptyIdx = entries.findIndex((e, idx) => !used.has(idx) && e.exerciseId === a.exerciseId && (!e.sets || e.sets.length === 0));
+      this.exerciseNames[it.exerciseId] = it.name;
+      const emptyIdx = entries.findIndex((e, idx) => !used.has(idx) && e.exerciseId === it.exerciseId && (!e.sets || e.sets.length === 0));
       if (emptyIdx >= 0) {
         used.add(emptyIdx);
         result.push(Object.assign({}, entries[emptyIdx], { sets }));
       } else {
-        result.push({ exerciseId: a.exerciseId, sets });
+        result.push({ exerciseId: it.exerciseId, sets });
       }
-      if (Array.isArray(log.exercises) && !log.exercises.some(x => x.id === a.exerciseId)) {
-        log.exercises.push({ id: a.exerciseId, name: a.name, targetSets: a.count, targetReps: String(a.reps), notes: '' });
+      if (Array.isArray(log.exercises) && !log.exercises.some(x => x.id === it.exerciseId)) {
+        log.exercises.push({ id: it.exerciseId, name: it.name, targetSets: sets.length, targetReps: String(sets[0].reps), notes: '' });
       }
     });
 
@@ -2741,7 +3030,33 @@ class GymApp {
       const ae = this.activeWorkout.exercises.find(e => e.id === exId);
       if (ae) return ae.name;
     }
+    for (const log of this.workoutLogs) {
+      const ex = (log.exercises || []).find(e => e.id === exId && typeof e.name === 'string' && e.name.trim());
+      if (ex) return ex.name;
+    }
     return 'Упражнение';
+  }
+
+  getHistoricalExerciseName(log, exId) {
+    const snapshot = (log.exercises || []).find(e => e.id === exId && typeof e.name === 'string' && e.name.trim());
+    return snapshot ? snapshot.name : this.findExerciseName(exId);
+  }
+
+  // Add only missing compact snapshots while a legacy record's source is still available.
+  // Never change an existing historical name, ID or set.
+  preserveHistoricalExerciseNames() {
+    let changed = false;
+    this.workoutLogs.forEach(log => {
+      (log.entries || []).forEach(entry => {
+        if ((log.exercises || []).some(e => e.id === entry.exerciseId)) return;
+        const name = this.findExerciseName(entry.exerciseId);
+        if (name === 'Упражнение') return;
+        if (!log.exercises) log.exercises = [];
+        log.exercises.push({ id: entry.exerciseId, name });
+        changed = true;
+      });
+    });
+    if (changed) this.saveWorkoutLogs();
   }
 
   // --- EXERCISE PROGRESS & CANVAS CHART ---
@@ -2764,154 +3079,16 @@ class GymApp {
         list.push({ id, name: this.exerciseNames[id] });
       }
     });
+    this.workoutLogs.forEach(log => (log.exercises || []).forEach(e => {
+      if (!seen.has(e.id) && typeof e.name === 'string' && e.name.trim()) {
+        seen.add(e.id);
+        list.push({ id: e.id, name: e.name });
+      }
+    }));
     return list;
   }
 
   // --- ИМПОРТ ИСТОРИИ ИЗ ДНЕВНИКА (файл выбирает пользователь вручную, сеть не используется) ---
-  applySeed(seed, silent = false) {
-    if (!seed || !Array.isArray(seed.workoutLogs)) return 0;
-
-    // Нормализация названий упражнений по meta.merged_names
-    const nameMap = {};
-    const merged = (seed.meta && seed.meta.merged_names) || {};
-    Object.keys(merged).forEach(canon => merged[canon].forEach(alias => { nameMap[alias] = canon; }));
-    const canonical = (n) => nameMap[n] || n;
-
-    // Стабильные id упражнений по названию (переиспользуем уже существующие)
-    const idByName = {};
-    Object.keys(this.exerciseNames).forEach(id => { idByName[this.exerciseNames[id]] = id; });
-    let counter = 0;
-    const getExId = (name) => {
-      if (!idByName[name]) {
-        counter++;
-        let id = 'seed-ex-' + counter;
-        while (this.exerciseNames[id]) { counter++; id = 'seed-ex-' + counter; }
-        idByName[name] = id;
-        this.exerciseNames[id] = name;
-      }
-      return idByName[name];
-    };
-
-    // Ранее импортированные записи заменяем свежими данными из файла
-    this.workoutLogs = this.workoutLogs.filter(l => !String(l.id).startsWith('seed-'));
-    const existingIds = new Set(this.workoutLogs.map(l => l.id));
-    const newLogs = [];
-    // Статистика по каждому шаблону: все упражнения, когда-либо сделанные в этом дне
-    const statsByTemplate = {};
-    // Как часто каждый шаблон выполнялся в конкретный день недели (для названия шаблона)
-    const weekdaysByTemplate = {};
-    const templateName = (tpl) => {
-      const c = weekdaysByTemplate[tpl] || {};
-      const top = Object.keys(c).sort((a, b) => c[b] - c[a])[0];
-      return top || ('Тренировка ' + tpl);
-    };
-
-    seed.workoutLogs.forEach(sl => {
-      const logId = 'seed-' + sl.id;
-      const [y, m, d] = String(sl.date).split('-').map(Number);
-      const tpl = sl.dayTemplate || 'A';
-      const wdName = sl.weekday || this.weekdayName(new Date(y, m - 1, d, 12));
-      const wdCount = weekdaysByTemplate[tpl] || (weekdaysByTemplate[tpl] = {});
-      wdCount[wdName] = (wdCount[wdName] || 0) + 1;
-      const entries = (sl.entries || []).map(en => ({
-        exerciseId: getExId(canonical(en.exercise)),
-        sets: (en.sets || []).map(s => ({ weight: s.weight, reps: s.reps }))
-      }));
-      const tplStats = statsByTemplate[tpl] || (statsByTemplate[tpl] = {});
-      entries.forEach(en => {
-        const st = tplStats[en.exerciseId] || (tplStats[en.exerciseId] = { count: 0, lastDate: '', lastSets: [] });
-        st.count++;
-        if (String(sl.date) >= st.lastDate && en.sets.length) {
-          st.lastDate = String(sl.date);
-          st.lastSets = en.sets;
-        }
-      });
-      if (existingIds.has(logId)) return;
-      newLogs.push({
-        id: logId,
-        date: new Date(y, m - 1, d, 12, 0, 0).toISOString(),
-        dateOnly: true,
-        dayId: 'seed-day-' + tpl,
-        dayName: wdName,
-        programId: SEED_PROGRAM_ID,
-        note: sl.note || '',
-        entries
-      });
-    });
-
-    // Необязательный блок templates: { A: { name, exercises: [названия] }, ... } — состав дней задаётся явно
-    const tplDefs = (seed.templates && typeof seed.templates === 'object') ? seed.templates : null;
-    const hasTplDef = (tpl) => !!(tplDefs && tplDefs[tpl] && Array.isArray(tplDefs[tpl].exercises));
-    const dayKeys = () => (tplDefs ? Object.keys(tplDefs).filter(hasTplDef) : Object.keys(statsByTemplate)).sort();
-    const dayTitle = (tpl) => (hasTplDef(tpl) && tplDefs[tpl].name) ? tplDefs[tpl].name : templateName(tpl);
-    const makeDayExercise = (exId, st) => ({
-      id: exId,
-      name: this.exerciseNames[exId],
-      targetSets: (st && st.lastSets.length) || 3,
-      targetReps: String((st && st.lastSets[0] && st.lastSets[0].reps) || 10),
-      notes: ''
-    });
-
-    // Программа с днями A/B: по templates, а без него — ВСЕ упражнения из истории шаблона (частые сверху)
-    const buildDayExercises = (tpl) => {
-      const stats = statsByTemplate[tpl] || {};
-      if (hasTplDef(tpl)) {
-        const seen = new Set();
-        const list = [];
-        tplDefs[tpl].exercises.forEach(rawName => {
-          const exId = getExId(canonical(rawName));
-          if (seen.has(exId)) return;
-          seen.add(exId);
-          list.push(makeDayExercise(exId, stats[exId]));
-        });
-        return list;
-      }
-      return Object.keys(stats)
-        .sort((a, b) => stats[b].count - stats[a].count)
-        .map(exId => makeDayExercise(exId, stats[exId]));
-    };
-
-    const seedDays = () => dayKeys().map(tpl => ({
-      id: 'seed-day-' + tpl,
-      name: dayTitle(tpl),
-      exercises: buildDayExercises(tpl)
-    }));
-
-    const seedProgram = this.programs.find(p => p.id === SEED_PROGRAM_ID);
-    if (!seedProgram) {
-      this.programs.push({ id: SEED_PROGRAM_ID, name: 'Моя программа (A/B)', days: seedDays() });
-      this.currentProgramId = SEED_PROGRAM_ID;
-    } else {
-      // Уже импортировано ранее: пересобираем дни A/B по актуальным данным файла
-      seedProgram.days = seedDays();
-      this.currentProgramId = SEED_PROGRAM_ID;
-    }
-    this.savePrograms();
-
-    // Удаляем старые импортированные названия упражнений, которых нигде нет
-    const usedIds = new Set();
-    this.workoutLogs.forEach(l => (l.entries || []).forEach(en => usedIds.add(en.exerciseId)));
-    this.programs.forEach(p => (p.days || []).forEach(d => (d.exercises || []).forEach(e => usedIds.add(e.id))));
-    Object.keys(this.exerciseNames).forEach(id => {
-      if (id.startsWith('seed-ex-') && !usedIds.has(id)) delete this.exerciseNames[id];
-    });
-
-    // Убираем демо-записи и добавляем историю, сортируем по дате
-    this.workoutLogs = this.workoutLogs.filter(l => !DEMO_LOG_IDS.includes(l.id));
-    this.workoutLogs = this.workoutLogs.concat(newLogs)
-      .sort((a, b) => new Date(a.date) - new Date(b.date));
-    this.saveWorkoutLogs();
-    this.saveExerciseNames();
-
-    this.renderHome();
-    this.renderHistory();
-    if (!silent || newLogs.length > 0) {
-      this.showToast(`Импортировано тренировок: ${newLogs.length}`);
-    }
-    return newLogs.length;
-  }
-
-  // Подставляет выбранное упражнение графика (если прежнего нет в списке — берёт первое)
   populateExerciseSelect() {
     const exercises = this.getChartExercises();
     if (!exercises.some(e => e.id === this.chartExerciseId)) {
@@ -3151,12 +3328,22 @@ class GymApp {
 
   // --- SETTINGS, BACKUP & PWA ---
   exportDataJSON() {
+    // Export a self-contained copy, without mutating legacy records just to download a file.
+    const historicalLogs = JSON.parse(JSON.stringify(this.workoutLogs));
+    historicalLogs.forEach(log => (log.entries || []).forEach(entry => {
+      if ((log.exercises || []).some(e => e.id === entry.exerciseId)) return;
+      const name = this.getHistoricalExerciseName(log, entry.exerciseId);
+      if (name !== 'Упражнение') {
+        if (!log.exercises) log.exercises = [];
+        log.exercises.push({ id: entry.exerciseId, name });
+      }
+    }));
     const data = {
       version: '1.0',
       exportedAt: new Date().toISOString(),
       programs: this.programs,
       currentProgramId: this.currentProgramId,
-      workoutLogs: this.workoutLogs,
+      workoutLogs: historicalLogs,
       exerciseNames: this.exerciseNames,
       hiddenExercises: this.hiddenExercises
     };
@@ -3174,39 +3361,6 @@ class GymApp {
     this.showToast('База успешно экспортирована в JSON');
   }
 
-  importDataJSON(event) {
-    const file = event.target.files && event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = JSON.parse(String(e.target.result).replace(/^\uFEFF/, ''));
-        const isSeedFormat = !Array.isArray(data.programs) && Array.isArray(data.workoutLogs) &&
-          data.workoutLogs.some(l => Array.isArray(l.entries) && l.entries.some(en => typeof en.exercise === 'string'));
-        if (isSeedFormat) {
-          // Файл истории из дневника (как seed_workouts.json): добавляем тренировки и упражнения
-          const added = this.applySeed(data, false);
-          if (!added) this.showToast('Новых тренировок нет: все уже импортированы');
-        } else if (data.programs && Array.isArray(data.programs) && data.programs.length > 0) {
-          this.openConfirmSheet({
-            title: 'Заменить данные?',
-            text: 'Импорт заменит все текущие данные на устройстве данными из файла.',
-            okLabel: 'Заменить',
-            onOk: () => this.applyBackupData(data)
-          });
-        } else {
-          this.showToast('Неверный формат JSON файла бэкапа');
-        }
-      } catch (err) {
-        this.showToast('Ошибка при чтении JSON файла: ' + err.message);
-      }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
-  }
-
-
   clearAllData() {
     this.openConfirmSheet({
       title: 'Удалить все данные?',
@@ -3216,26 +3370,83 @@ class GymApp {
     });
   }
 
-  applyBackupData(data) {
-    this.programs = data.programs;
-    this.currentProgramId = data.currentProgramId || data.programs[0].id;
-    this.workoutLogs = Array.isArray(data.workoutLogs) ? data.workoutLogs : [];
-    this.exerciseNames = (data.exerciseNames && typeof data.exerciseNames === 'object') ? data.exerciseNames : {};
-    this.hiddenExercises = Array.isArray(data.hiddenExercises) ? data.hiddenExercises : [];
-    this.activeWorkout = null;
-    this.savePrograms();
-    this.saveWorkoutLogs();
-    this.saveExerciseNames();
-    this.saveHiddenExercises();
-    this.saveActiveWorkout();
-    this.populateExerciseSelect();
+  showImportError(message) {
+    this.openConfirmSheet({
+      title: 'Импорт не выполнен',
+      text: `${message} Ваши существующие данные не изменены. Выберите файл и попробуйте снова.`,
+      okLabel: 'Понятно', onOk: () => {}
+    });
+  }
+
+  importDataJSON(event) {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      let data;
+      try {
+        const text = String(e.target.result).replace(/^\uFEFF/, '').trim();
+        if (!text) { this.showImportError('Файл пуст.'); return; }
+        try { data = JSON.parse(text); }
+        catch { this.showImportError('Не удалось прочитать JSON. Проверьте формат файла.'); return; }
+        const baseline = GymImport.stable(this.getImportState());
+        const storageBaseline = this.getImportStorageFingerprint();
+        const plan = GymImport.prepare(data, this.getImportState());
+        const { added, updated, deleted, unchanged } = plan.counts;
+        const backup = plan.kind === 'backup';
+        this.openConfirmSheet({
+          title: backup ? 'Заменить данные из копии?' : 'Импортировать дневник?',
+          text: (backup
+            ? 'Полная замена программ, истории и справочника данными файла. Активная тренировка будет сброшена. '
+            : 'Безопасное объединение по ID. Отсутствующие в файле записи и существующие шаблоны сохраняются. ') +
+            `Новых тренировок: ${added}. Обновится: ${updated}. Будет удалено: ${deleted}. Без изменений: ${unchanged}.` +
+            (deleted ? ' ВНИМАНИЕ: удалённые записи будут потеряны после подтверждения.' : ' Удаления тренировок нет.'),
+          okLabel: backup ? 'Заменить данные' : 'Импортировать',
+          onOk: () => this.commitImport(plan, baseline, storageBaseline)
+        });
+      } catch (error) {
+        console.warn('Import validation failed:', error);
+        this.showImportError(error.message || 'Файл имеет неподдерживаемую структуру.');
+      }
+    };
+    reader.onerror = () => this.showImportError('Не удалось прочитать файл.');
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  commitImport(plan, baseline, storageBaseline) {
+    if (GymImport.stable(this.getImportState()) !== baseline) {
+      this.showImportError('Данные изменились после предпросмотра. Подготовьте импорт заново.');
+      return;
+    }
+    try {
+      if (this.getImportStorageFingerprint() !== storageBaseline) {
+        this.showImportError('Сохранённые данные изменились после предпросмотра. Подготовьте импорт заново.');
+        return;
+      }
+      // localStorage guarantees atomic replacement of ONE key, including quota failures.
+      // Legacy keys are untouched; no rollback writes or partial multi-key commits.
+      localStorage.setItem('gym_state_v1', JSON.stringify(plan.next));
+    } catch (error) {
+      console.warn('Import persistence failed:', error);
+      this.showImportError('Хранилище недоступно или заполнено. Не удалось сохранить импорт.');
+      return;
+    }
+    Object.assign(this, plan.next);
+    this.usesStateSnapshot = true;
+    if (plan.kind === 'backup') {
+      this.exerciseInputState = {};
+      this.dayDraft = null;
+      this.logEdit = null;
+    }
     this.renderHome();
     this.renderHistory();
-    this.showToast('Данные успешно импортированы!');
+    this.showToast('Импорт успешно завершён');
   }
 
   wipeAllData() {
     localStorage.clear();
+    this.usesStateSnapshot = false;
     this.exerciseNames = {};
     this.hiddenExercises = [];
     this.exerciseInputState = {};

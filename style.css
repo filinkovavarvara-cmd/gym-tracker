@@ -82,6 +82,8 @@ body {
 .page-title { font-size: 40px; line-height: 48px; font-weight: 590; color: var(--white-100); }
 .page-header-sm { margin-bottom: 24px; }
 .page-title-sm { font-size: 28px; line-height: 33px; }
+#viewProgram .page-header { flex-wrap: wrap; row-gap: var(--gap); }
+#viewProgram .header-actions { margin-left: auto; }
 .btn-round {
   width: var(--control-size); height: var(--control-size); flex: none; padding: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -172,6 +174,9 @@ body {
 .sheet-title { font-size: 18px; line-height: 24px; font-weight: 590; color: var(--white-100); }
 .sheet-text { font-size: 16px; line-height: 24px; font-weight: 400; color: var(--white-80); }
 .sheet-actions { display: flex; gap: var(--gap); }
+.editor-guard .sheet-actions { flex-direction: column; }
+.editor-guard .sheet-actions .btn-pill { flex: none; width: 100%; }
+#confirmSheetSave[hidden] { display: none; }
 .sheet-actions .btn-pill { white-space: nowrap; padding: 12px 6px; }
 .sheet-actions .btn-pill:disabled { opacity: 0.5; }
 
@@ -236,6 +241,12 @@ body {
 .sets-editor { display: flex; flex-direction: column; gap: var(--gap); margin-top: -8px; padding-top: 16px; border-top: 0.5px solid var(--white-50); }
 .set-row { display: flex; align-items: center; gap: 8px; }
 .set-num { width: 18px; flex: none; font-size: 14px; line-height: 20px; color: var(--white-50); text-align: center; }
+.log-sets { display: flex; flex-direction: column; gap: var(--gap); }
+#viewLogEdit { padding-bottom: 96px; }
+#viewLogEdit .bottom-action { background: var(--color-bg); padding-top: var(--gap); }
+.log-set-row .metric-item { flex: 1 1 0; min-width: 0; }
+.log-set-row .metric-pill { flex: 1 1 auto; min-width: 0; padding: 8px; }
+.log-set-row .metric-input { min-width: 0; max-width: 100%; }
 .set-remove {
   width: 32px; height: 32px; margin-left: auto; flex: none; padding: 0; display: inline-flex; align-items: center; justify-content: center;
   background: transparent; border: none; border-radius: var(--r-100); cursor: pointer; opacity: 0.8;

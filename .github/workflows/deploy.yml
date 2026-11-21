@@ -1,0 +1,145 @@
+name: Deploy GymTracker to GitHub Pages
+
+# Manual production deployment only. No push, pull request, schedule, or tag can
+# start this workflow, and the ref guard below refuses anything except main.
+on:
+  workflow_dispatch:
+
+# Least privilege for the run; the deploy job grants Pages permissions itself.
+permissions:
+  contents: read
+
+# Serialize production deployments, and never cancel one that is mid-flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Verify deploy preconditions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require the main branch
+        env:
+          REF: ${{ github.ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != "workflow_dispatch" ]; then
+            echo "::error::This workflow runs only from a manual workflow_dispatch."
+            exit 1
+          fi
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Deployments are allowed only from refs/heads/main (requested: $REF)."
+            exit 1
+          fi
+
+      - name: Require an approval gate on the deployment environment
+        # A workflow cannot approve on the owner's behalf, but it can refuse to
+        # run while the environment has no required reviewers. Without this, a
+        # dispatch would deploy immediately and the approval gate would be a myth.
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/environments/github-pages"
+          # Read the environment both anonymously (public repository view) and with
+          # the job token; the token may lack the administration scope needed to see
+          # protection rules, so a missing rule in one view is not proof of absence.
+          curl -fsS -H 'Accept: application/vnd.github+json' "$api" -o "$RUNNER_TEMP/env-public.json" || true
+          curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' "$api" -o "$RUNNER_TEMP/env-token.json" || true
+          if [ ! -s "$RUNNER_TEMP/env-public.json" ] && [ ! -s "$RUNNER_TEMP/env-token.json" ]; then
+            echo "::error::Cannot read the github-pages environment; refusing to deploy."
+            exit 1
+          fi
+          gate=false
+          for f in "$RUNNER_TEMP/env-public.json" "$RUNNER_TEMP/env-token.json"; do
+            [ -s "$f" ] || continue
+            if [ "$(jq -r '[.protection_rules[]?.type] | index("required_reviewers") != null' "$f" 2>/dev/null)" = "true" ]; then
+              gate=true
+            fi
+          done
+          if [ "$gate" != "true" ]; then
+            echo "::error::The github-pages environment has no required reviewers. Configure Settings -> Environments -> github-pages -> Required reviewers before deploying."
+            exit 1
+          fi
+          echo "Approval gate is configured on the github-pages environment."
+
+  validate:
+    name: Validate, test, and package
+    needs: guard
+    # Same job definition as CI: syntax, release verifier, 260 Chrome tests.
+    # The verified 37-file package is uploaded as the gymtracker-release artifact.
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Publish verified package
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read # Check out release-files.txt for the package re-check.
+      pages: write # Deploy to Pages.
+      id-token: write # Let Pages verify the deployment origin.
+    steps:
+      - name: Check out repository (no credentials persisted)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Confirm main has not advanced since the dispatch
+        # Approval can take hours. Refuse to publish a commit that is no longer
+        # the head of main; re-dispatch instead of deploying superseded bytes.
+        env:
+          TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          if ! curl -fsS -H "Authorization: Bearer $TOKEN" -H 'Accept: application/vnd.github+json' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/branches/main" -o "$RUNNER_TEMP/main.json"; then
+            echo "::error::Could not read the current head of main; refusing to deploy."
+            exit 1
+          fi
+          head=$(jq -r '.commit.sha' "$RUNNER_TEMP/main.json")
+          if [ -z "$head" ] || [ "$head" = "null" ]; then
+            echo "::error::Could not resolve the head commit of main; refusing to deploy."
+            exit 1
+          fi
+          if [ "$head" != "$SHA" ]; then
+            echo "::error::main moved from $SHA to $head after this run started. Re-run the workflow from the new head."
+            exit 1
+          fi
+
+      - name: Download the package built by the validation job
+        # Matches the upload-artifact v7 uploader in ci.yml, so the artifact
+        # backend and format are aligned.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gymtracker-release
+          path: ${{ runner.temp }}/verified-release
+
+      - name: Re-check the downloaded package against this commit
+        # Exactly 37 allowlisted files, no extras, no symlinks, bytes identical to
+        # the checked-out sources, and the runtime security scan applied again.
+        run: node .github/scripts/verify-release.cjs --check "$RUNNER_TEMP/verified-release"
+
+      - name: Upload the verified package as the Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/verified-release
+          include-hidden-files: true # The package contains .nojekyll.
+          retention-days: 1
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,9 +1,10 @@
-﻿const CACHE_NAME = 'gym-tracker-v40';
+﻿const CACHE_NAME = 'gym-tracker-v49';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './import.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -38,28 +39,29 @@ const ASSETS = [
 
 // Установка Service Worker и кэширование статических ресурсов
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS).catch((err) => {
-        console.warn('Cache addAll partial failure (e.g. icons generated dynamically):', err);
-      });
-    }).then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const existed = await caches.has(CACHE_NAME);
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })));
+    } catch (error) {
+      // Never remove a pre-existing cache, including another build using this key.
+      if (!existed) await caches.delete(CACHE_NAME);
+      throw error; // A rejected install keeps the previous worker active.
+    }
+    await self.skipWaiting();
+  })());
 });
 
 // Активация и удаление старых кэшей
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            return caches.delete(key);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
-  );
+  event.waitUntil((async () => {
+    // Transfer control to the fully precached worker before retiring old caches.
+    await self.clients.claim();
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => /^gym-tracker-v\d+$/.test(key) && key !== CACHE_NAME)
+      .map(key => caches.delete(key)));
+  })());
 });
 
 // Стратегия Network First с откатом на Cache для офлайн-работы
