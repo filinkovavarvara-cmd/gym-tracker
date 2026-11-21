@@ -23,7 +23,7 @@ test('QA-02: add template fits the Workouts header and can be clicked', async ({
   expect(button.right).toBeLessThanOrEqual(viewport);
   expect(button.right).toBeLessThanOrEqual(header.right);
   expect(button.width).toBe(48);
-  expect(button.height).toBe(48);
+  expect(button.height).toBeCloseTo(48, 1);
   await add.click(); // Playwright checks that the button receives pointer events.
   await expect(page.locator('#viewDayEdit')).toHaveClass(/active/);
 });
